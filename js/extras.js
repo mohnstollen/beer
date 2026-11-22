@@ -1,7 +1,9 @@
 // Funktionen, die Netz oder Gerätesensoren brauchen: Barcode-Scan, Open Food Facts, Karte, GPS.
-import { h, clear, openSheet, closeSheet } from './ui.js';
+import { h, clear, openSheet, closeSheet, toast } from './ui.js';
+import { isNative, hasPlugin, nativeScan } from './native.js';
 
-const ZXING_URL = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+// In der Android-App liegt die Bibliothek im APK (offline), im Web wird sie bei Bedarf geladen
+const ZXING_URL = isNative() ? 'vendor/zxing.min.js' : 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
 const LEAFLET_JS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
 const LEAFLET_CSS = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 
@@ -39,7 +41,20 @@ export function isValidEan(code) {
  * Öffnet die Kamera und liefert den ersten erkannten EAN-Code (oder eine manuelle Eingabe).
  * Nutzt die native BarcodeDetector-API, sonst ZXing (lazy geladen). Promise<string|null>
  */
-export function scanBarcode() {
+export async function scanBarcode() {
+  if (hasPlugin('BarcodeScanner')) {
+    try {
+      const code = await nativeScan();
+      return code && isValidEan(code) ? code : code ? (toast('Kein gültiger EAN-Code erkannt'), null) : null;
+    } catch (err) {
+      toast(err.message || 'Nativer Scanner nicht verfügbar – nutze Kamera im Browser-Modus', { duration: 6000 });
+      // weiter mit dem Web-Scanner
+    }
+  }
+  return scanBarcodeWeb();
+}
+
+function scanBarcodeWeb() {
   return new Promise((resolve) => {
     let finished = false;
     let stream = null;

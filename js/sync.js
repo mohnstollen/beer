@@ -1,5 +1,6 @@
 // WebDAV-Client für die Synchronisation (Nextcloud oder jeder WebDAV-Server mit CORS).
 import { folderUrl } from './sync-core.js';
+import { useNativeHttp, nativeFetch } from './native.js';
 
 export const DATA_FILE = 'beer-sync.json';
 export const PHOTO_DIR = 'fotos/';
@@ -11,14 +12,15 @@ export class SyncError extends Error {
 export function createClient(config) {
   const base = folderUrl(config);
   const auth = 'Basic ' + btoa(unescape(encodeURIComponent(`${config.user}:${config.password}`)));
+  // In der Android-App laufen Anfragen nativ (keine CORS-Grenzen), im Browser über fetch
+  const doFetch = (url, opts) => (useNativeHttp()
+    ? nativeFetch(url, opts)
+    : fetch(url, { ...opts, credentials: 'omit', cache: 'no-store' }));
 
   async function request(method, path, { body, headers = {}, okStatus = [] } = {}) {
     let res;
     try {
-      res = await fetch(base + path, {
-        method, body, credentials: 'omit', cache: 'no-store',
-        headers: { Authorization: auth, ...headers },
-      });
+      res = await doFetch(base + path, { method, body, headers: { Authorization: auth, ...headers } });
     } catch {
       throw new SyncError(navigator.onLine === false
         ? 'Offline – Synchronisation folgt, sobald wieder Netz da ist.'
@@ -47,7 +49,7 @@ export function createClient(config) {
         let p = url.origin + marker[1];
         for (const part of parts.slice(0, -1)) {
           p += part + '/';
-          try { await fetch(p, { method: 'MKCOL', headers: { Authorization: auth }, credentials: 'omit' }); } catch { /* egal */ }
+          try { await doFetch(p, { method: 'MKCOL', headers: { Authorization: auth } }); } catch { /* egal */ }
         }
       }
       await ensureDir('');

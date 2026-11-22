@@ -80,6 +80,10 @@ export function closeSheet(entry = sheetStack[sheetStack.length - 1]) {
   if (!sheetStack.length) document.body.classList.remove('sheet-open');
 }
 
+export function hasOpenSheet() {
+  return sheetStack.length > 0;
+}
+
 export function closeAllSheets() {
   while (sheetStack.length) closeSheet();
 }

@@ -2,11 +2,12 @@ import * as db from './db.js';
 import * as M from './model.js';
 import {
   h, clear, openSheet, closeSheet, closeAllSheets, toast, field, toggle, segmented, chips, stars,
-  stepper, datalist, blobUrl, photoField, barChart, shareBar,
+  stepper, datalist, blobUrl, photoField, barChart, shareBar, hasOpenSheet,
 } from './ui.js';
 import { STYLE_LEXICON, findStyle, BINGO_STYLES } from './styles.js';
 import { SYNC_STORES, SYNCED_SETTINGS, SYNC_FORMAT, mergeSnapshots, mergeTombstones, folderUrl } from './sync-core.js';
 import { createClient, SyncError } from './sync.js';
+import { isNative, shareFile, onBackButton, exitApp } from './native.js';
 import { scanBarcode, lookupOpenFoodFacts, getPosition, osmLink, openMapSheet } from './extras.js';
 
 const state = { beers: [], crates: [], consumptions: [], tastings: [], meta: {} };
@@ -698,7 +699,7 @@ function viewMore() {
         h('button', { type: 'button', class: 'btn', onclick: () => importInput.click() }, 'Import JSON …')),
       importInput,
       state.meta.lastExport ? h('p', { class: 'muted' }, `Letzter Export: ${dayFmt.format(new Date(state.meta.lastExport))}`) : null),
-    h('p', { class: 'muted center small' }, 'Beer Tracker · offline-fähige PWA'));
+    h('p', { class: 'muted center small' }, isNative() ? 'Beer Tracker · Android-App' : 'Beer Tracker · offline-fähige PWA'));
 }
 
 function discoverCard() {
@@ -1609,10 +1610,11 @@ function syncCard() {
   return h('section', { class: 'card stack' },
     h('h3', null, '☁️ Synchronisation (Nextcloud)'),
     h('p', { class: 'muted small' }, 'Gleicht alle Daten inkl. Fotos zwischen deinen Geräten über deine Nextcloud ab (WebDAV). Jedes Gerät mit denselben Zugangsdaten verbinden.'),
+    isNative() ? h('p', { class: 'small' }, '✓ In der Android-App ist keine zusätzliche Freigabe in Nextcloud nötig – nur Server, Benutzer und App-Passwort.') : null,
     field('Server', server, 'Adresse deiner Nextcloud – oder eine vollständige WebDAV-Ordner-URL'),
     h('div', { class: 'grid2' }, field('Benutzer', user), field('Ordner', folder)),
     field('App-Passwort', password, 'Nextcloud → Einstellungen → Sicherheit → „Neues App-Passwort erstellen“'),
-    h('details', { class: 'more' },
+    isNative() ? null : h('details', { class: 'more' },
       h('summary', null, 'Einmalige Einrichtung in Nextcloud'),
       h('ol', { class: 'small help' },
         h('li', null, 'In Nextcloud als Admin die App „WebAppPassword“ installieren (Apps, Suche „WebAppPassword“).'),
@@ -1626,7 +1628,11 @@ function syncCard() {
 
 // ---------- Export / Import ----------
 
-function download(filename, blob) {
+async function download(filename, blob) {
+  if (isNative()) {
+    try { await shareFile(filename, blob); } catch (err) { if (!/cancel/i.test(err?.message || '')) alert(`Export fehlgeschlagen: ${err.message}`); }
+    return;
+  }
   const a = h('a', { href: URL.createObjectURL(blob), download: filename });
   document.body.append(a);
   a.click();
@@ -1711,7 +1717,14 @@ async function init() {
     window.addEventListener('online', () => scheduleSync(1000));
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
   }
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  if (isNative()) {
+    // Android-Zurück-Taste: Formular schließen → zum Start → App verlassen
+    onBackButton(() => {
+      if (hasOpenSheet()) closeSheet();
+      else if (currentRoute() !== 'start') location.hash = '#/start';
+      else exitApp();
+    });
+  } else if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (hadController) toast('Neue Version verfügbar', { action: 'Neu laden', onAction: () => location.reload(), duration: 15000 });

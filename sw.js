@@ -1,6 +1,6 @@
 // Service Worker: App-Shell cache-first, damit die App komplett offline läuft.
 // VERSION wird beim Deployment automatisch durch den Commit ersetzt (siehe .github/workflows/pages.yml).
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = `beer-${VERSION}`;
 const ASSETS = [
   './',
@@ -15,6 +15,7 @@ const ASSETS = [
   './js/extras.js',
   './js/sync-core.js',
   './js/sync.js',
+  './js/native.js',
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',

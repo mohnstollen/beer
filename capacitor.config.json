@@ -1,0 +1,11 @@
+{
+  "appId": "io.github.mohnstollen.beer",
+  "appName": "Beer Tracker",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#f6f3ee"
+  },
+  "plugins": {
+    "SplashScreen": { "launchAutoHide": true }
+  }
+}

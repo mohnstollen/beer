@@ -9,12 +9,37 @@ eigene Nextcloud synchronisiert werden (siehe unten).
 
 ## Starten
 
-Es gibt keine Abhängigkeiten und keinen Build-Schritt. Node 18+ wird nur für Dev-Server und Tests gebraucht.
+Die Web-App selbst braucht keine Abhängigkeiten und keinen Build-Schritt. Node 18+ wird nur für Dev-Server und Tests gebraucht,
+`npm install` nur für die Android-App.
 
 ```bash
 npm start        # http://localhost:8080
 npm test         # Logik-Tests (node --test)
 ```
+
+## Android-App
+
+Die Android-App ist dieselbe App, verpackt mit [Capacitor](https://capacitorjs.com), plus einige native Funktionen.
+Entwurf und Begründung stehen in [docs/ANDROID.md](docs/ANDROID.md).
+
+- **Installieren:** auf dem Handy
+  [beer-tracker.apk](https://github.com/mohnstollen/beer/releases/download/android-latest/beer-tracker.apk) laden,
+  öffnen und „Installation aus dieser Quelle zulassen“ bestätigen. Für Updates die neue APK einfach darüber installieren,
+  die Daten bleiben erhalten.
+- **Vorteile gegenüber der PWA:**
+  - Nextcloud-Sync ohne WebAppPassword, weil die Anfragen nativ laufen und dadurch kein CORS gilt
+  - nativer Google-Barcode-Scanner
+  - Export über das Teilen-Menü
+  - Zurück-Taste
+  - alles offline im APK
+- **Daten** liegen in der App getrennt von der PWA. Übernahme per Sync oder JSON-Export/-Import.
+- **Bauen:** Der Workflow `.github/workflows/android.yml` baut bei jedem Push. Auf dem Standard-Branch aktualisiert er das
+  Release `android-latest`. Lokal geht es mit `npm install`, `node scripts/build-web.mjs`, `npx cap sync android` und dann
+  `android/` in Android Studio öffnen.
+- **Signatur:** Standardmäßig wird mit dem festen Debug-Schlüssel `android/debug.keystore` signiert (Standard-Passwort,
+  nur für die private Nutzung gedacht). Für einen geheimen Release-Schlüssel die Secrets `ANDROID_KEYSTORE_BASE64`,
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` und `ANDROID_KEY_PASSWORD` anlegen. Achtung: Beim Wechsel des
+  Schlüssels muss die App einmal neu installiert werden. Vorher synchronisieren oder exportieren.
 
 ## Veröffentlichen (GitHub Pages)
 
@@ -99,6 +124,9 @@ WebDAV-Ordner-URL angeben. Zum lokalen Testen gibt es einen Mock-Server:
 | `js/extras.js` | Barcode-Scan, Open Food Facts, Standort, Karte |
 | `js/sync-core.js` | Sync-Zusammenführung (rein, getestet) |
 | `js/sync.js` | WebDAV-Client |
+| `js/native.js` | Brücke zur Android-App (Capacitor-Plugins) |
+| `capacitor.config.json`, `android/` | Android-Projekt; `WebDavPlugin.java` für natives WebDAV |
+| `scripts/build-web.mjs` | stellt `www/` für Pages und Android zusammen |
 | `js/ui.js` | DOM-Helfer, Sheets, Toast, Chips/Sterne, Diagramme, Foto-Feld |
 | `js/app.js` | Ansichten (Start, Bestand, Verlauf, Statistik, Mehr) und Formulare |
 | `sw.js` | Service Worker (App-Shell-Cache, Version wird beim Deployment gesetzt) |

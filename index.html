@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Beer Tracker</title>
+  <meta name="description" content="Bier-Tastings und Kasten-Konsum erfassen – offline, nur für dich.">
+  <meta name="theme-color" content="#b86a00">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main id="view" tabindex="-1"></main>
+  <nav id="tabs" aria-label="Hauptnavigation">
+    <a href="#/start" data-route="start"><span aria-hidden="true">🍺</span>Start</a>
+    <a href="#/stock" data-route="stock"><span aria-hidden="true">▦</span>Bestand</a>
+    <a href="#/history" data-route="history"><span aria-hidden="true">☰</span>Verlauf</a>
+    <a href="#/stats" data-route="stats"><span aria-hidden="true">▁▃▅</span>Statistik</a>
+    <a href="#/more" data-route="more"><span aria-hidden="true">⋯</span>Mehr</a>
+  </nav>
+  <div id="sheets"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>Diese App benötigt JavaScript.</noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

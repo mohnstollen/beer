@@ -134,3 +134,35 @@ test('CSV-Export escaped Semikolon und Anführungszeichen', () => {
 test('suggestions sortiert nach Häufigkeit', () => {
   assert.deepEqual(M.suggestions(['Rewe', 'Edeka', 'Rewe', '', null, ' Rewe ']), ['Rewe', 'Edeka']);
 });
+
+test('Hinweise: fast leer, leer, MHD bald/abgelaufen', () => {
+  const s = fixture();
+  const now = new Date('2026-11-14T12:00:00');
+  // c1: 15 übrig → kein Nachkauf; c2 (alkoholfrei) seit 12.11. leer → 'empty'
+  let a = M.alerts(s, {}, now);
+  assert.deepEqual(a.map((x) => x.type), ['empty']);
+  assert.equal(a[0].beerId, 'rb0');
+
+  // c1 bis auf 2 leeren → 'low'
+  s.consumptions.push({ id: 'k4', crateId: 'c1', ts: '2026-11-13T18:00:00.000Z', qty: 13, ml: 6500 });
+  a = M.alerts(s, {}, now);
+  assert.ok(a.some((x) => x.type === 'low' && x.beerId === 'rb' && x.remaining === 2));
+
+  // MHD: in 5 Tagen → 'mhd', gestern → 'expired'
+  s.crates[0].bestBefore = '2026-11-19';
+  assert.ok(M.alerts(s, {}, now).some((x) => x.type === 'mhd' && x.days === 5));
+  s.crates[0].bestBefore = '2026-11-13';
+  assert.equal(M.alerts(s, {}, now)[0].type, 'expired');
+
+  // Leerer Kasten älter als emptyDays → kein Hinweis mehr
+  assert.ok(!M.alerts(s, {}, new Date('2026-11-30T12:00:00')).some((x) => x.type === 'empty'));
+});
+
+test('Hinweise: Einzelflasche löst keinen Nachkauf aus, Wegklicken wirkt', () => {
+  const s = fixture();
+  s.crates.push({ id: 'e1', beerId: 'aug', purchaseDate: '2026-11-10', count: 1, unitMl: 500, price: null, packaging: 'single' });
+  const now = new Date('2026-11-14T12:00:00');
+  assert.ok(!M.alerts(s, {}, now).some((x) => x.beerId === 'aug'));
+  const keys = M.alerts(s, {}, now).map((x) => x.key);
+  assert.equal(M.activeAlerts(s, {}, keys, now).length, 0);
+});

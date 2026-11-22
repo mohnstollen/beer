@@ -20,6 +20,8 @@ const STYLES = ['Pils', 'Helles', 'Export', 'Weißbier', 'Dunkles', 'Märzen', '
 const beersById = () => new Map(state.beers.map((b) => [b.id, b]));
 const cratesById = () => new Map(state.crates.map((c) => [c.id, c]));
 const tags = () => state.meta.tags || M.DEFAULT_TAGS;
+const alertSettings = () => ({ ...M.DEFAULT_ALERT_SETTINGS, ...(state.meta.alertSettings || {}) });
+const currentAlerts = () => M.activeAlerts(state, alertSettings(), state.meta.dismissedAlerts || []);
 const nowIso = () => new Date().toISOString();
 
 async function save(store, obj) {
@@ -159,10 +161,13 @@ function render() {
     const scroll = main.scrollTop;
     clear(main).append(VIEWS[route]());
     main.scrollTop = scroll;
+    const nAlerts = currentAlerts().length;
     for (const a of document.querySelectorAll('#tabs a')) {
       a.classList.toggle('active', a.dataset.route === route);
       if (a.dataset.route === route) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+      if (a.dataset.route === 'start') a.classList.toggle('has-alert', nAlerts > 0);
     }
+    updateAppBadge(nAlerts);
   });
 }
 
@@ -182,7 +187,8 @@ function progress(rest, total) {
 function crateRow(crate, { compact = false } = {}) {
   const rest = remainingOf(crate);
   const pack = M.packagingByKey(crate.packaging)?.label || `${crate.count}×${M.fmtMl(crate.unitMl)}`;
-  const mhdSoon = crate.bestBefore && M.daysBetween(new Date(), crate.bestBefore) <= 30;
+  const settings = alertSettings();
+  const mhdSoon = rest > 0 && crate.bestBefore && M.daysBetween(new Date(), crate.bestBefore) <= settings.mhdDays;
   const meta = [
     compact ? null : pack,
     compact ? null : crate.store,
@@ -196,7 +202,63 @@ function crateRow(crate, { compact = false } = {}) {
     h('div', { class: 'crate-meta' },
       meta ? h('span', null, meta) : null,
       crate.bestBefore ? h('span', { class: mhdSoon ? 'warn' : '' }, `MHD ${fmtDay(crate.bestBefore)}`) : null,
-      rest && rest <= Math.max(2, crate.count * 0.15) && crate.count > 1 ? h('span', { class: 'warn' }, 'fast leer') : null));
+      rest && rest <= settings.lowThreshold && crate.count > settings.lowThreshold ? h('span', { class: 'warn' }, 'fast leer') : null));
+}
+
+// ---------- Hinweise (Nachkauf, MHD) ----------
+
+function alertText(a) {
+  const name = beerName(a.beerId);
+  if (a.type === 'expired') {
+    const d = -a.days;
+    return { icon: '⚠️', title: `${name}: MHD abgelaufen`, sub: `seit ${d} ${d === 1 ? 'Tag' : 'Tagen'} · noch ${a.remaining} übrig` };
+  }
+  if (a.type === 'mhd') {
+    const when = a.days === 0 ? 'heute' : a.days === 1 ? 'morgen' : `in ${a.days} Tagen`;
+    return { icon: '⏳', title: `${name}: MHD ${when}`, sub: `noch ${a.remaining} übrig – bald trinken` };
+  }
+  if (a.type === 'low') {
+    return { icon: '🛒', title: `${name} fast leer`, sub: `nur noch ${a.remaining} übrig – nachkaufen?` };
+  }
+  return { icon: '🛒', title: `${name} ist leer`, sub: `leer seit ${fmtDay(M.toDateKey(a.emptiedAt))} – nachkaufen?` };
+}
+
+async function dismissAlert(key) {
+  const valid = new Set(M.alerts(state, alertSettings()).map((a) => a.key));
+  const list = [...(state.meta.dismissedAlerts || []).filter((k) => valid.has(k)), key];
+  await saveMeta('dismissedAlerts', list);
+  toast('Hinweis ausgeblendet', {
+    action: 'Rückgängig',
+    onAction: () => saveMeta('dismissedAlerts', list.filter((k) => k !== key)),
+  });
+}
+
+function alertsSection() {
+  const list = currentAlerts();
+  if (!list.length) return null;
+  const crates = cratesById();
+  return h('section', { class: 'section' },
+    h('div', { class: 'section-head' }, h('h2', null, 'Hinweise')),
+    h('div', { class: 'card list alerts' }, list.map((a) => {
+      const t = alertText(a);
+      const crate = crates.get(a.crateId);
+      const action = a.type === 'low' || a.type === 'empty'
+        ? h('button', { type: 'button', class: 'btn small', onclick: () => openCrateSheet({ beerId: a.beerId, template: crate }) }, 'Nachkauf')
+        : h('button', { type: 'button', class: 'btn small primary', onclick: () => bookConsumption(crate) }, '+1');
+      return h('div', { class: `alert alert-${a.type}` },
+        h('span', { class: 'alert-icon', 'aria-hidden': 'true' }, t.icon),
+        h('button', { type: 'button', class: 'alert-main', onclick: () => crate && openCrateDetail(crate) },
+          h('strong', null, t.title), h('span', null, t.sub)),
+        action,
+        h('button', { type: 'button', class: 'alert-close', 'aria-label': 'Hinweis ausblenden', onclick: () => dismissAlert(a.key) }, '✕'));
+    })));
+}
+
+function updateAppBadge(n) {
+  try {
+    if (n > 0) navigator.setAppBadge?.(n)?.catch?.(() => {});
+    else navigator.clearAppBadge?.()?.catch?.(() => {});
+  } catch { /* nicht unterstützt */ }
 }
 
 function emptyState(text, action) {
@@ -233,6 +295,7 @@ function viewStart() {
     h('div', { class: 'quick' },
       h('button', { type: 'button', class: 'btn big', onclick: () => openTastingSheet() }, '★ Neues Tasting'),
       h('button', { type: 'button', class: 'btn big', onclick: () => openCrateSheet() }, '▦ Neuer Kasten')),
+    alertsSection(),
     last ? h('div', { class: 'last-entry' },
       h('span', null, 'Zuletzt: ',
         last.kind === 'tasting' ? `★ ${beerName(last.ref.beerId)}` : `+${last.ref.qty} ${beerName(cratesById().get(last.ref.crateId)?.beerId)}`,
@@ -480,6 +543,7 @@ function viewMore() {
             h('div', { class: 'entry-title' }, h('strong', null, b.name)),
             h('div', { class: 'entry-sub' }, beerSubtitle(b))))))
         : h('p', { class: 'muted' }, 'Noch keine Sorten.')),
+    alertSettingsCard(),
     h('section', { class: 'card' },
       h('h3', null, 'Tasting-Tags'),
       field('Kommagetrennt', tagInput),
@@ -501,6 +565,38 @@ function viewMore() {
       importInput,
       state.meta.lastExport ? h('p', { class: 'muted' }, `Letzter Export: ${dayFmt.format(new Date(state.meta.lastExport))}`) : null),
     h('p', { class: 'muted center small' }, 'Beer Tracker · offline-fähige PWA'));
+}
+
+function alertSettingsCard() {
+  const cur = alertSettings();
+  const num = (v) => h('input', { type: 'number', inputmode: 'numeric', min: '0', max: '365', value: String(v) });
+  const low = num(cur.lowThreshold);
+  const mhd = num(cur.mhdDays);
+  const empty = num(cur.emptyDays);
+  const nDismissed = (state.meta.dismissedAlerts || []).length;
+  return h('section', { class: 'card stack' },
+    h('h3', null, 'Hinweise'),
+    h('div', { class: 'grid2' },
+      field('„Fast leer“ ab (Flaschen)', low),
+      field('MHD-Warnung (Tage vorher)', mhd)),
+    field('Nachkauf nach leerem Kasten anzeigen (Tage)', empty),
+    h('div', { class: 'btn-row' },
+      h('button', {
+        type: 'button', class: 'btn small',
+        onclick: async () => {
+          const toInt = (el, d) => { const n = parseInt(el.value, 10); return Number.isFinite(n) && n >= 0 ? n : d; };
+          await saveMeta('alertSettings', {
+            lowThreshold: toInt(low, M.DEFAULT_ALERT_SETTINGS.lowThreshold),
+            mhdDays: toInt(mhd, M.DEFAULT_ALERT_SETTINGS.mhdDays),
+            emptyDays: toInt(empty, M.DEFAULT_ALERT_SETTINGS.emptyDays),
+          });
+          toast('Einstellungen gespeichert');
+        },
+      }, 'Speichern'),
+      nDismissed ? h('button', {
+        type: 'button', class: 'btn small ghost',
+        onclick: async () => { await saveMeta('dismissedAlerts', []); toast('Ausgeblendete Hinweise wieder sichtbar'); },
+      }, `${nDismissed} ausgeblendete zeigen`) : null));
 }
 
 function beerSubtitle(b) {
@@ -717,8 +813,12 @@ function openTastingSheet({ tasting = null, beerId = null, crateId = null } = {}
 
 // ---------- Sheet: Kasten ----------
 
-function openCrateSheet({ crate = null, beerId = null } = {}) {
-  const c = crate || {};
+function openCrateSheet({ crate = null, beerId = null, template = null } = {}) {
+  // Nachkauf: Gebinde, Anzahl, Preis und Händler vom letzten Kasten übernehmen (ohne Daten/ID)
+  const c = crate || (template ? {
+    beerId: template.beerId, packaging: template.packaging, count: template.count,
+    unitMl: template.unitMl, price: template.price, store: template.store,
+  } : {});
   const editing = !!crate;
   const data = { beerId: c.beerId || beerId, packaging: c.packaging || 'k20x05' };
   const initialPack = M.packagingByKey(data.packaging) || M.PACKAGINGS[0];
@@ -993,6 +1093,10 @@ async function init() {
   render();
   db.requestPersistence();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('Neue Version verfügbar', { action: 'Neu laden', onAction: () => location.reload(), duration: 15000 });
+    });
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 }

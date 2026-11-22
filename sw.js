@@ -1,6 +1,6 @@
 // Service Worker: App-Shell cache-first, damit die App komplett offline läuft.
-// Bei Änderungen an den Dateien VERSION erhöhen.
-const VERSION = 'v1';
+// VERSION wird beim Deployment automatisch durch den Commit ersetzt (siehe .github/workflows/pages.yml).
+const VERSION = 'v2';
 const CACHE = `beer-${VERSION}`;
 const ASSETS = [
   './',

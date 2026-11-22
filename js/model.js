@@ -414,3 +414,63 @@ export function parseDecimal(str) {
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
+
+// ---------- Hinweise: Nachkauf & MHD ----------
+
+export const DEFAULT_ALERT_SETTINGS = { lowThreshold: 3, mhdDays: 14, emptyDays: 7 };
+
+/**
+ * Hinweise für den Startbildschirm.
+ * - 'low':     Bestand einer Sorte (über alle offenen Kästen) ≤ Schwelle → Nachkauf
+ * - 'empty':   letzter Kasten einer Sorte ist seit ≤ emptyDays leer, kein neuer offen → Nachkauf
+ * - 'expired': MHD eines offenen Kastens überschritten
+ * - 'mhd':     MHD eines offenen Kastens in ≤ mhdDays Tagen
+ * Jeder Hinweis hat eine stabile `key`, damit er weggeklickt werden kann.
+ */
+export function alerts(state, settings = {}, now = new Date()) {
+  const { lowThreshold, mhdDays, emptyDays } = { ...DEFAULT_ALERT_SETTINGS, ...settings };
+  const { crates, consumptions, tastings } = state;
+  const out = [];
+  const byBeer = new Map();
+  for (const crate of crates) {
+    const remaining = crateRemaining(crate, consumptions, tastings);
+    const list = byBeer.get(crate.beerId) || [];
+    list.push({ crate, remaining });
+    byBeer.set(crate.beerId, list);
+
+    if (remaining > 0 && crate.bestBefore) {
+      const days = daysBetween(now, crate.bestBefore);
+      if (days < 0) out.push({ type: 'expired', key: `expired:${crate.id}`, crateId: crate.id, beerId: crate.beerId, days, remaining });
+      else if (days <= mhdDays) out.push({ type: 'mhd', key: `mhd:${crate.id}`, crateId: crate.id, beerId: crate.beerId, days, remaining });
+    }
+  }
+  for (const [beerId, list] of byBeer) {
+    const open = list.filter((x) => x.remaining > 0);
+    const total = open.reduce((a, x) => a + x.remaining, 0);
+    if (open.length) {
+      // Einzelflaschen-Käufe lösen keinen Nachkauf-Hinweis aus
+      const bigEnough = open.some((x) => x.crate.count > lowThreshold);
+      if (bigEnough && total <= lowThreshold) {
+        const newest = open.reduce((a, b) => (a.crate.purchaseDate >= b.crate.purchaseDate ? a : b));
+        out.push({ type: 'low', key: `low:${newest.crate.id}`, crateId: newest.crate.id, beerId, remaining: total });
+      }
+      continue;
+    }
+    const multi = list.filter((x) => x.crate.count > 1);
+    if (!multi.length) continue;
+    const last = multi
+      .map((x) => ({ ...x, emptiedAt: crateEmptiedAt(x.crate, consumptions, tastings) }))
+      .filter((x) => x.emptiedAt)
+      .sort((a, b) => (a.emptiedAt < b.emptiedAt ? 1 : -1))[0];
+    if (last && daysBetween(last.emptiedAt, now) <= emptyDays) {
+      out.push({ type: 'empty', key: `empty:${last.crate.id}`, crateId: last.crate.id, beerId, remaining: 0, emptiedAt: last.emptiedAt });
+    }
+  }
+  const order = { expired: 0, mhd: 1, low: 2, empty: 3 };
+  return out.sort((a, b) => order[a.type] - order[b.type] || (a.days ?? 0) - (b.days ?? 0));
+}
+
+export function activeAlerts(state, settings = {}, dismissed = [], now = new Date()) {
+  const d = new Set(dismissed);
+  return alerts(state, settings, now).filter((a) => !d.has(a.key));
+}

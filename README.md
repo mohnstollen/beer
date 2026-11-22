@@ -15,8 +15,29 @@ npm start        # http://localhost:8080
 npm test         # Logik-Tests (node --test)
 ```
 
-Zum Installieren auf dem Handy die Dateien auf einen beliebigen statischen HTTPS-Host legen
-(z. B. GitHub Pages), im Browser öffnen und dann „Zum Startbildschirm hinzufügen“ wählen.
+## Veröffentlichen (GitHub Pages)
+
+Der Workflow `.github/workflows/pages.yml` führt bei jedem Push die Tests aus. Bei Pushes auf den
+**Standard-Branch** veröffentlicht er die App außerdem auf GitHub Pages. Die Cache-Version des
+Service Workers wird dabei automatisch auf den Commit gesetzt, sodass installierte Apps Updates bekommen
+(„Neue Version verfügbar – Neu laden“).
+
+Einmalig einrichten: im Repository unter **Settings → Pages → Build and deployment → Source** die Option
+**GitHub Actions** wählen. Danach ist die App unter `https://<user>.github.io/<repo>/` erreichbar.
+Auf dem Handy dann im Browser öffnen und „Zum Startbildschirm hinzufügen“ wählen.
+
+## Hinweise (Nachkauf & MHD)
+
+Auf dem Startbildschirm erscheinen automatisch Hinweise. Am Start-Tab zeigt ein roter Punkt an, dass es
+welche gibt, und installiert auch ein App-Badge, wo das unterstützt wird.
+
+- **fast leer:** Der Bestand einer Sorte über alle offenen Kästen liegt bei höchstens N Flaschen (Standard 3).
+  Ein Tipp auf „Nachkauf“ öffnet einen neuen Kasten mit Gebinde, Preis und Händler vom letzten Kasten.
+- **leer:** Der letzte Kasten einer Sorte ist seit höchstens 7 Tagen leer, und es gibt keinen neuen.
+- **MHD bald / abgelaufen:** Ein offener Kasten erreicht in höchstens 14 Tagen sein MHD oder hat es schon überschritten.
+
+Jeder Hinweis lässt sich wegklicken. Die Schwellen werden unter „Mehr → Hinweise“ eingestellt.
+Einzelflaschen lösen keinen Nachkauf-Hinweis aus.
 
 ## Aufbau
 
@@ -27,7 +48,7 @@ Zum Installieren auf dem Handy die Dateien auf einen beliebigen statischen HTTPS
 | `js/db.js` | IndexedDB-Hülle (`beers`, `crates`, `consumptions`, `tastings`, `meta`) |
 | `js/ui.js` | DOM-Helfer, Sheets, Toast, Chips/Sterne, Diagramme, Foto-Feld |
 | `js/app.js` | Ansichten (Start, Bestand, Verlauf, Statistik, Mehr) und Formulare |
-| `sw.js` | Service Worker (App-Shell-Cache). Bei Änderungen `VERSION` erhöhen |
+| `sw.js` | Service Worker (App-Shell-Cache, Version wird beim Deployment gesetzt) |
 
 ## Entscheidungen
 

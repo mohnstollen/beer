@@ -630,3 +630,61 @@ export function badges(state, findStyle = null) {
   ];
   return def.map(([id, icon, title, desc, value, goal]) => ({ id, icon, title, desc, value: Math.min(value, goal), goal, done: value >= goal }));
 }
+
+// ---------- Kalender ----------
+
+/** Tagessummen: Map 'YYYY-MM-DD' → {bottles, ml, af, alc} */
+export function dailyTotals(events) {
+  const m = new Map();
+  for (const e of events) {
+    const k = toDateKey(e.ts);
+    const d = m.get(k) || { bottles: 0, ml: 0, af: 0, alc: 0 };
+    d.bottles += e.bottles;
+    d.ml += e.ml;
+    if (e.alcoholFree) d.af += e.bottles; else d.alc += e.bottles;
+    m.set(k, d);
+  }
+  return m;
+}
+
+/** Stufe 0–4 für die Einfärbung: 0 = nichts, 1 = 1, 2 = 2, 3 = 3–4, 4 = 5+ */
+export function calendarLevel(bottles) {
+  if (!bottles) return 0;
+  if (bottles === 1) return 1;
+  if (bottles === 2) return 2;
+  if (bottles <= 4) return 3;
+  return 4;
+}
+
+/** Wochen eines Monats (Mo–So), Tage außerhalb des Monats = null. month: 0–11 */
+export function monthGrid(year, month) {
+  const first = new Date(year, month, 1);
+  const days = new Date(year, month + 1, 0).getDate();
+  const offset = (first.getDay() + 6) % 7;
+  const cells = [...Array(offset).fill(null), ...Array.from({ length: days }, (_, i) => toDateKey(new Date(year, month, i + 1)))];
+  while (cells.length % 7) cells.push(null);
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+/**
+ * Kennzahlen für einen Zeitraum [fromKey, toKey] (inklusive, YYYY-MM-DD):
+ * aktive Tage, Tage gesamt, längste Pause (Tage ohne Bier), längste Serie.
+ * Zukünftige Tage (nach todayKey) zählen nicht mit.
+ */
+export function calendarSummary(totals, fromKey, toKey, todayKey = toDateKey(new Date())) {
+  const end = toKey < todayKey ? toKey : todayKey;
+  let active = 0, days = 0, pause = 0, maxPause = 0, streak = 0, maxStreak = 0;
+  for (let d = parseDate(fromKey); toDateKey(d) <= end; d.setDate(d.getDate() + 1)) {
+    days += 1;
+    if (totals.get(toDateKey(d))?.bottles) {
+      active += 1; streak += 1; pause = 0;
+    } else {
+      pause += 1; streak = 0;
+    }
+    maxPause = Math.max(maxPause, pause);
+    maxStreak = Math.max(maxStreak, streak);
+  }
+  return { active, days, maxPause, maxStreak };
+}

@@ -12,6 +12,7 @@ const ui = {
   stockTab: 'open',
   history: { q: '', kind: 'all', minRating: 0, period: 'all', beerId: '', brewery: '' },
   stats: { period: 'month', alc: 'all', groupVariants: false },
+  cal: { mode: 'month', year: new Date().getFullYear(), month: new Date().getMonth() },
 };
 
 const STYLES = [...STYLE_LEXICON.map((x) => x.name), 'Zwickel', 'Weizenbock', 'Hazy IPA', 'Imperial Stout'];
@@ -499,6 +500,7 @@ function viewStats() {
       tile(M.fmtLiters(sum.ml), 'Menge'),
       tile(`${M.fmtNumber(sum.grams, 0)} g`, 'Alkohol'),
       tile(`${M.fmtNumber(spendTotal / 100, 0)} €`, 'Ausgaben')),
+    calendarCard(alcFiltered, s.alc === 'af' ? 'af' : 'alc'),
     barChart({ title: 'Konsum pro Woche (Flaschen)', data: weeks, series, stacked, labelEvery: 3 }),
     barChart({ title: 'Konsum pro Monat (Flaschen)', data: months, series, stacked, labelEvery: 2 }),
     barChart({ title: 'Wochentage (Flaschen, Zeitraum)', data: wd, series, stacked }),
@@ -524,6 +526,109 @@ function viewStats() {
         h('dt', null, 'Ø Dauer bis leer'), h('dd', null, crates.avgDurationDays != null ? `${M.fmtNumber(crates.avgDurationDays, 1)} Tage (${crates.emptyCount} Kästen)` : '–'),
         h('dt', null, 'Ø Preis pro Flasche'), h('dd', null, M.fmtEuro(crates.avgPerBottle)),
         h('dt', null, 'Ø Preis pro Liter'), h('dd', null, M.fmtEuro(crates.avgPerLiter)))));
+}
+
+// ---------- Kalender ----------
+
+const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const monthLongFmt = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' });
+const dayShortFmt = new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+
+function calendarCard(events, series) {
+  const c = ui.cal;
+  const totals = M.dailyTotals(events);
+  const today = M.toDateKey(new Date());
+  const isMonth = c.mode === 'month';
+  const fromKey = isMonth ? M.toDateKey(new Date(c.year, c.month, 1)) : `${c.year}-01-01`;
+  const toKey = isMonth ? M.toDateKey(new Date(c.year, c.month + 1, 0)) : `${c.year}-12-31`;
+  // Erst ab dem ersten Eintrag zählen, sonst wirkt die Zeit vor der App wie eine lange Pause
+  const firstKey = [...totals.keys()].sort()[0] || null;
+  const effFrom = firstKey && firstKey > fromKey ? firstKey : fromKey;
+  const sum = firstKey && effFrom <= toKey ? M.calendarSummary(totals, effFrom, toKey, today) : null;
+  const tip = h('div', { class: 'cal-tip', role: 'status' }, 'Tag antippen für Details');
+
+  const describe = (key) => {
+    const d = totals.get(key);
+    const label = dayShortFmt.format(M.parseDate(key));
+    if (!d) return `${label}: kein Bier`;
+    const af = d.af && d.alc ? ` (davon ${d.af} alkoholfrei)` : d.af ? ' (alkoholfrei)' : '';
+    return `${label}: ${d.bottles} Bier · ${M.fmtLiters(d.ml)}${af}`;
+  };
+  const dayCell = (key, { small = false } = {}) => {
+    if (!key) return h('span', { class: 'cal-day empty' });
+    const d = totals.get(key);
+    const level = M.calendarLevel(d?.bottles || 0);
+    const future = key > today;
+    return h('button', {
+      type: 'button',
+      class: `cal-day ${series} l${level}${key === today ? ' today' : ''}${future ? ' future' : ''}`,
+      'aria-label': describe(key),
+      disabled: future,
+      onpointerenter: () => { tip.textContent = describe(key); },
+      onfocus: () => { tip.textContent = describe(key); },
+      onclick: () => { tip.textContent = describe(key); if (d) openDaySheet(key); },
+    }, small ? '' : String(Number(key.slice(8))));
+  };
+  const monthBlock = (year, month, small) => h('div', { class: 'cal-month' + (small ? ' small' : '') },
+    small ? h('button', { type: 'button', class: 'cal-month-title', onclick: () => { c.mode = 'month'; c.year = year; c.month = month; render(); } },
+      monthShortFmt.format(new Date(year, month, 1)).replace('.', '')) : null,
+    h('div', { class: 'cal-grid' },
+      WEEKDAYS.map((w) => h('span', { class: 'cal-wd' }, small ? w[0] : w)),
+      M.monthGrid(year, month).flat().map((key) => dayCell(key, { small }))));
+
+  const shift = (dir) => {
+    if (isMonth) {
+      const d = new Date(c.year, c.month + dir, 1);
+      c.year = d.getFullYear(); c.month = d.getMonth();
+    } else c.year += dir;
+    render();
+  };
+  const atEnd = isMonth ? (c.year > new Date().getFullYear() || (c.year === new Date().getFullYear() && c.month >= new Date().getMonth())) : c.year >= new Date().getFullYear();
+  const legendCells = [0, 1, 2, 3, 4].map((l) => h('span', { class: `cal-day ${series} l${l} legend-cell`, 'aria-hidden': 'true' }));
+
+  return h('section', { class: 'card cal' },
+    h('div', { class: 'section-head' }, h('h3', null, 'Kalender'),
+      segmented([{ value: 'month', label: 'Monat' }, { value: 'year', label: 'Jahr' }], c.mode, (v) => { c.mode = v; render(); }, { small: true })),
+    h('div', { class: 'cal-nav' },
+      h('button', { type: 'button', class: 'btn small ghost', 'aria-label': 'zurück', onclick: () => shift(-1) }, '‹'),
+      h('strong', null, isMonth ? monthLongFmt.format(new Date(c.year, c.month, 1)) : String(c.year)),
+      h('button', { type: 'button', class: 'btn small ghost', 'aria-label': 'weiter', disabled: atEnd, onclick: () => shift(1) }, '›')),
+    isMonth ? monthBlock(c.year, c.month, false)
+      : h('div', { class: 'cal-year' }, Array.from({ length: 12 }, (_, m) => monthBlock(c.year, m, true))),
+    tip,
+    h('div', { class: 'cal-foot' },
+      h('span', { class: 'muted small' }, sum && sum.days > 0
+        ? `${sum.active} von ${sum.days} Tagen · längste Pause ${sum.maxPause} ${sum.maxPause === 1 ? 'Tag' : 'Tage'}`
+        : 'Keine Einträge in diesem Zeitraum'),
+      h('span', { class: 'cal-legend', 'aria-label': 'Farbskala: 0, 1, 2, 3–4, 5 oder mehr Bier' },
+        h('span', { class: 'muted small' }, '0'), legendCells, h('span', { class: 'muted small' }, '5+'))));
+}
+
+function openDaySheet(key) {
+  const events = M.drinkEvents(state).filter((e) => M.toDateKey(e.ts) === key);
+  const sum = M.sumEvents(events);
+  const cmap = cratesById();
+  const sheet = openSheet({
+    title: dateLongFmt.format(M.parseDate(key)),
+    body: [
+      h('p', { class: 'muted' }, `${sum.bottles} Bier · ${M.fmtLiters(sum.ml)}${sum.grams ? ` · ${M.fmtNumber(sum.grams, 0)} g Alkohol` : ''}`),
+      h('div', { class: 'card list' }, events.slice().reverse().map((e) => {
+        const t = e.ref;
+        const isTasting = e.kind === 'tasting';
+        return h('button', {
+          type: 'button', class: 'entry',
+          onclick: () => { closeSheet(sheet); isTasting ? openTastingSheet({ tasting: t }) : openConsumptionSheet(t); },
+        },
+        h('span', { class: 'entry-icon' }, isTasting ? '★' : '🍺'),
+        h('div', { class: 'entry-main' },
+          h('div', { class: 'entry-title' }, h('strong', null, `${isTasting ? '' : `×${t.qty} `}${beerName(e.beerId)}`),
+            isTasting && t.rating ? stars(t.rating, null, { size: 'sm', readonly: true }) : null),
+          h('div', { class: 'entry-sub' }, isTasting ? [t.location ? `📍 ${t.location}` : null, (t.tags || []).join(', ')].filter(Boolean).join(' · ')
+            : `aus Kasten vom ${fmtDay(cmap.get(t.crateId)?.purchaseDate)}`)),
+        h('span', { class: 'entry-time' }, timeFmt.format(new Date(e.ts))));
+      })),
+    ],
+  });
 }
 
 // ---------- Ansicht: Mehr ----------

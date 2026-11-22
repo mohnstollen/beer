@@ -213,3 +213,18 @@ test('Erfolge und Bingo', () => {
   assert.equal(M.bingoLines(all), 2); // erste Zeile + erste Spalte
   assert.equal(M.countryFlag('DE'), '🇩🇪');
 });
+
+test('Kalender: Tagessummen, Stufen, Monatsraster, Pausen', () => {
+  const s = fixture();
+  const totals = M.dailyTotals(M.drinkEvents(s));
+  const k = M.toDateKey('2026-11-02T18:00:00.000Z');
+  assert.equal(totals.get(k).bottles, 3);
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(M.calendarLevel), [0, 1, 2, 3, 3, 4, 4]);
+  const grid = M.monthGrid(2026, 10); // November 2026 beginnt an einem Sonntag
+  assert.equal(grid[0].filter(Boolean).length, 1);
+  assert.equal(grid[0][6], '2026-11-01');
+  assert.equal(grid.flat().filter(Boolean).length, 30);
+  const t = new Map([['2026-11-01', { bottles: 1 }], ['2026-11-02', { bottles: 2 }], ['2026-11-06', { bottles: 1 }]]);
+  assert.deepEqual(M.calendarSummary(t, '2026-11-01', '2026-11-30', '2026-11-08'),
+    { active: 3, days: 8, maxPause: 3, maxStreak: 2 });
+});

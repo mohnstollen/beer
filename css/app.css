@@ -320,3 +320,49 @@ body.sheet-open #toast { bottom: calc(16px + var(--safe-b)); }
 .alert-close { background: none; border: 0; width: 36px; height: 36px; flex: 0 0 36px; color: var(--muted); }
 #tabs a { position: relative; }
 #tabs a.has-alert::after { content: ""; position: absolute; top: 10px; left: calc(50% + 10px); width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+
+/* Sortenauswahl, Scan */
+.search-row { display: flex; gap: 8px; align-items: stretch; }
+.search-row input { flex: 1; min-width: 0; }
+.scan-btn { flex: 0 0 auto; white-space: nowrap; }
+.picked-main { min-width: 0; }
+.picked-actions { display: flex; flex-direction: column; align-items: flex-end; }
+.picked-actions .link { padding: 2px 4px; }
+.scan-frame { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+.scan-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scan-line { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: #f5b746; box-shadow: 0 0 8px #f5b746; animation: scan 1.6s ease-in-out infinite alternate; }
+@keyframes scan { from { transform: translateY(-50px); } to { transform: translateY(50px); } }
+.style-info { margin-top: 2px; }
+.style-info .link { padding: 4px 0; text-align: left; font-weight: 500; }
+
+/* GPS */
+.stack-sm { display: flex; flex-direction: column; gap: 8px; }
+.gps-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Karte */
+.map { height: min(60vh, 480px); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.leaflet-popup-content .link { padding: 4px 0 0; }
+
+/* Entdecken / Lexikon */
+.pill { background: var(--accent-soft); color: var(--text); border-radius: 999px; padding: 2px 10px; font-size: .8rem; font-weight: 700; }
+.chip.static { cursor: default; min-height: 0; padding: 6px 12px; font-size: .9rem; }
+
+/* Abzeichen */
+.badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 10px; }
+.badge { display: flex; flex-direction: column; gap: 3px; padding: 10px; border-radius: 12px; background: var(--surface-2); opacity: .75; }
+.badge.done { background: var(--accent-soft); opacity: 1; }
+.badge-icon { font-size: 1.6rem; filter: grayscale(1); }
+.badge.done .badge-icon { filter: none; }
+.badge-ok { font-size: .8rem; font-weight: 700; color: var(--accent); }
+.badge .progress { margin-top: 4px; height: 6px; }
+
+/* Bingo */
+.bingo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 10px 0 6px; }
+.bingo-cell { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px;
+  border-radius: 10px; background: var(--surface-2); text-align: center; border: 2px solid transparent; }
+.bingo-cell.done { background: var(--accent-soft); border-color: var(--accent); }
+.bingo-icon { font-size: 1.1rem; line-height: 1; color: var(--muted); }
+.bingo-cell.done .bingo-icon { color: var(--accent); font-weight: 800; }
+.bingo-label { font-size: .68rem; line-height: 1.15; font-weight: 600; color: var(--text-2); overflow-wrap: anywhere; }
+.bingo-cell:not(.done) .bingo-icon { filter: grayscale(1); opacity: .55; }
+.bingo-label { hyphens: auto; -webkit-hyphens: auto; }

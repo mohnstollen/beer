@@ -39,6 +39,27 @@ welche gibt, und installiert auch ein App-Badge, wo das unterstützt wird.
 Jeder Hinweis lässt sich wegklicken. Die Schwellen werden unter „Mehr → Hinweise“ eingestellt.
 Einzelflaschen lösen keinen Nachkauf-Hinweis aus.
 
+## Weitere Funktionen
+
+- **Sorten bearbeiten:** in der Sortenauswahl auf „bearbeiten“ tippen oder unter **Mehr → Sorten**.
+  Fehlt der Alkoholgehalt, steht dort ein Hinweis, denn ohne ihn zählt die Sorte nicht zur Alkoholmenge.
+- **Barcode-Scan:** Der Knopf „▥ Scan“ in der Sortenauswahl öffnet die Kamera. Ist der Barcode schon bekannt,
+  wird die Sorte direkt gewählt. Sonst werden Name, Brauerei und Alkoholgehalt aus
+  [Open Food Facts](https://world.openfoodfacts.org) vorgeschlagen. Die Erkennung nutzt die native
+  BarcodeDetector-API (Chrome/Android) oder ZXing (iOS/Safari, wird bei Bedarf geladen).
+  Die Nummer kann auch eingetippt werden.
+- **Orte:** Beim Tasting „Außer Haus“ speichert „📍 Standort“ die Koordinaten. Ist ein bekannter Ort
+  in der Nähe (unter 250 m), wird sein Name vorgeschlagen. Unter Mehr → Orte gibt es die Auswertung pro Ort und eine
+  Karte (OpenStreetMap über Leaflet). Die Statistik zeigt „Wo trinke ich was?“.
+- **Bierstil-Lexikon:** 24 Stile mit Beschreibung, Alkoholgehalt, Glas, Temperatur und Foodpairing,
+  durchsuchbar auch nach Speisen. Das Feld „Stil“ einer Sorte wird automatisch zugeordnet
+  („Hefeweizen“ → Weißbier).
+- **Erfolge & Bingo:** 17 Abzeichen mit Fortschritt, dazu ein Stil-Bingo und ein Länder-Bingo (je 4×4 mit Linien-Zählung).
+  Das Land wird bei der Sorte eingetragen.
+
+Kamera-Scan, Open Food Facts und Kartenkacheln brauchen Netz. Alles andere läuft offline.
+Scanner- und Karten-Bibliothek werden nach dem ersten Laden zwischengespeichert.
+
 ## Aufbau
 
 | Datei | Inhalt |
@@ -46,6 +67,8 @@ Einzelflaschen lösen keinen Nachkauf-Hinweis aus.
 | `index.html` | App-Hülle mit Tab-Leiste |
 | `js/model.js` | Reine Logik: Restmengen, Trink-Ereignisse, Statistik, CSV, Formatierung |
 | `js/db.js` | IndexedDB-Hülle (`beers`, `crates`, `consumptions`, `tastings`, `meta`) |
+| `js/styles.js` | Bierstil-Lexikon (Daten) und Zuordnung freier Stil-Eingaben |
+| `js/extras.js` | Barcode-Scan, Open Food Facts, Standort, Karte |
 | `js/ui.js` | DOM-Helfer, Sheets, Toast, Chips/Sterne, Diagramme, Foto-Feld |
 | `js/app.js` | Ansichten (Start, Bestand, Verlauf, Statistik, Mehr) und Formulare |
 | `sw.js` | Service Worker (App-Shell-Cache, Version wird beim Deployment gesetzt) |

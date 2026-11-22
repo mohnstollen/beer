@@ -474,3 +474,159 @@ export function activeAlerts(state, settings = {}, dismissed = [], now = new Dat
   const d = new Set(dismissed);
   return alerts(state, settings, now).filter((a) => !d.has(a.key));
 }
+
+// ---------- Länder ----------
+
+export const COUNTRIES = [
+  ['DE', 'Deutschland'], ['AT', 'Österreich'], ['CH', 'Schweiz'], ['CZ', 'Tschechien'], ['BE', 'Belgien'],
+  ['NL', 'Niederlande'], ['DK', 'Dänemark'], ['PL', 'Polen'], ['GB', 'Großbritannien'], ['IE', 'Irland'],
+  ['FR', 'Frankreich'], ['IT', 'Italien'], ['ES', 'Spanien'], ['PT', 'Portugal'], ['SE', 'Schweden'],
+  ['NO', 'Norwegen'], ['FI', 'Finnland'], ['HU', 'Ungarn'], ['HR', 'Kroatien'], ['GR', 'Griechenland'],
+  ['US', 'USA'], ['CA', 'Kanada'], ['MX', 'Mexiko'], ['BR', 'Brasilien'], ['JP', 'Japan'], ['CN', 'China'],
+  ['TH', 'Thailand'], ['IN', 'Indien'], ['AU', 'Australien'], ['NZ', 'Neuseeland'], ['ZA', 'Südafrika'],
+].map(([code, name]) => ({ code, name }));
+
+export const BINGO_COUNTRIES = ['DE', 'AT', 'CZ', 'BE', 'NL', 'GB', 'IE', 'DK', 'PL', 'IT', 'US', 'MX', 'JP', 'FR', 'ES', 'CH'];
+
+export function countryName(code) {
+  return COUNTRIES.find((c) => c.code === code)?.name || code || '';
+}
+
+export function countryFlag(code) {
+  if (!code || !/^[A-Z]{2}$/.test(code)) return '';
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+// ---------- Orte ----------
+
+export function placeKey(name) {
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/**
+ * Auswertung „wo trinke ich was“: ein Eintrag pro Ort (Groß-/Kleinschreibung egal).
+ * { key, name, count, avgRating, ratedCount, beers: [{beerId, n}], lastTs, lat, lon, tastings }
+ */
+export function placeStats(state) {
+  const m = new Map();
+  const sorted = [...state.tastings].sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  for (const t of sorted) {
+    const key = placeKey(t.location);
+    if (!key) continue;
+    const p = m.get(key) || { key, name: t.location.trim(), count: 0, ratingSum: 0, ratedCount: 0, beerCounts: new Map(), lastTs: null, lat: null, lon: null, tastings: [] };
+    p.count += 1;
+    if (t.rating) { p.ratingSum += t.rating; p.ratedCount += 1; }
+    p.beerCounts.set(t.beerId, (p.beerCounts.get(t.beerId) || 0) + 1);
+    p.lastTs = t.ts;
+    p.name = t.location.trim(); // jüngste Schreibweise
+    if (typeof t.lat === 'number' && typeof t.lon === 'number') { p.lat = t.lat; p.lon = t.lon; }
+    p.tastings.push(t);
+    m.set(key, p);
+  }
+  return [...m.values()].map((p) => ({
+    key: p.key, name: p.name, count: p.count, ratedCount: p.ratedCount,
+    avgRating: p.ratedCount ? p.ratingSum / p.ratedCount : null,
+    beers: [...p.beerCounts.entries()].map(([beerId, n]) => ({ beerId, n })).sort((a, b) => b.n - a.n),
+    lastTs: p.lastTs, lat: p.lat, lon: p.lon, tastings: p.tastings.reverse(),
+  })).sort((a, b) => b.count - a.count || (a.lastTs < b.lastTs ? 1 : -1));
+}
+
+/** Nächster bekannter Ort mit Koordinaten innerhalb maxKm – oder null. */
+export function nearestPlace(state, lat, lon, maxKm = 0.25) {
+  let best = null;
+  for (const p of placeStats(state)) {
+    if (p.lat == null) continue;
+    const d = haversineKm(lat, lon, p.lat, p.lon);
+    if (d <= maxKm && (!best || d < best.distanceKm)) best = { ...p, distanceKm: d };
+  }
+  return best;
+}
+
+// ---------- Erfolge & Bingo ----------
+
+/** Sorten, die mindestens einmal getrunken wurden (Tasting oder Konsum). */
+function drunkBeerIds(state) {
+  return new Set(drinkEvents(state).map((e) => e.beerId));
+}
+
+/**
+ * Stil-Bingo: bingoIds = Lexikon-IDs, findStyle = Zuordnungsfunktion (aus styles.js).
+ * Liefert [{id, done, beerIds}]
+ */
+export function styleBingo(state, bingoIds, findStyle) {
+  const drunk = drunkBeerIds(state);
+  const hits = new Map(bingoIds.map((id) => [id, []]));
+  for (const b of state.beers) {
+    if (!drunk.has(b.id)) continue;
+    const s = findStyle(b.style);
+    if (s && hits.has(s.id)) hits.get(s.id).push(b.id);
+  }
+  return bingoIds.map((id) => ({ id, done: hits.get(id).length > 0, beerIds: hits.get(id) }));
+}
+
+export function countryBingo(state, codes = BINGO_COUNTRIES) {
+  const drunk = drunkBeerIds(state);
+  return codes.map((code) => {
+    const beerIds = state.beers.filter((b) => b.country === code && drunk.has(b.id)).map((b) => b.id);
+    return { code, done: beerIds.length > 0, beerIds };
+  });
+}
+
+/** Bingo-Linien (Zeilen, Spalten, Diagonalen) in einem 4×4-Feld. */
+export function bingoLines(cells, size = 4) {
+  const done = (i) => cells[i]?.done;
+  let lines = 0;
+  for (let r = 0; r < size; r++) if ([...Array(size)].every((_, c) => done(r * size + c))) lines++;
+  for (let c = 0; c < size; c++) if ([...Array(size)].every((_, r) => done(r * size + c))) lines++;
+  if ([...Array(size)].every((_, i) => done(i * size + i))) lines++;
+  if ([...Array(size)].every((_, i) => done(i * size + (size - 1 - i)))) lines++;
+  return lines;
+}
+
+/** Abzeichen mit Fortschritt. findStyle optional für das Stil-Abzeichen. */
+export function badges(state, findStyle = null) {
+  const events = drinkEvents(state);
+  const drunk = new Set(events.map((e) => e.beerId));
+  const beersById = new Map(state.beers.map((b) => [b.id, b]));
+  const drunkBeers = [...drunk].map((id) => beersById.get(id)).filter(Boolean);
+  const total = sumEvents(events).bottles;
+  const tastings = state.tastings;
+  const emptied = state.crates.filter((c) => crateEmptiedAt(c, state.consumptions, state.tastings)).length;
+  const places = new Set(tastings.map((t) => placeKey(t.location)).filter(Boolean)).size;
+  const countries = new Set(drunkBeers.map((b) => b.country).filter(Boolean)).size;
+  const breweries = new Set(drunkBeers.map((b) => placeKey(b.brewery)).filter(Boolean)).size;
+  const styles = findStyle ? new Set(drunkBeers.map((b) => findStyle(b.style)?.id).filter(Boolean)).size : 0;
+  const afCount = events.filter((e) => e.alcoholFree).reduce((a, e) => a + e.bottles, 0);
+  const cratesPerBeer = Math.max(0, ...[...state.crates.reduce((m, c) => m.set(c.beerId, (m.get(c.beerId) || 0) + 1), new Map()).values()]);
+  const perfect = tastings.filter((t) => t.rating === 5).length;
+
+  const def = [
+    ['first', '🍺', 'Prost!', 'Das erste Bier erfasst', total, 1],
+    ['taster10', '📝', 'Verkoster', '10 Tastings', tastings.length, 10],
+    ['taster50', '🎓', 'Kenner', '50 Tastings', tastings.length, 50],
+    ['taster100', '🏆', 'Biersommelier', '100 Tastings', tastings.length, 100],
+    ['variety10', '🧭', 'Entdecker', '10 verschiedene Sorten', drunk.size, 10],
+    ['variety50', '🗺️', 'Sortenjäger', '50 verschiedene Sorten', drunk.size, 50],
+    ['breweries5', '🏭', 'Brauerei-Tour', 'Biere aus 5 Brauereien', breweries, 5],
+    ['styles8', '🎨', 'Stil-Sammler', '8 verschiedene Bierstile', styles, 8],
+    ['countries5', '🌍', 'Weltenbummler', 'Biere aus 5 Ländern', countries, 5],
+    ['places5', '📍', 'Stammgast überall', 'An 5 Orten verkostet', places, 5],
+    ['crate1', '📦', 'Kasten geschafft', 'Den ersten Kasten leer getrunken', emptied, 1],
+    ['crate10', '🏗️', 'Vorratsmeister', '10 Kästen leer getrunken', emptied, 10],
+    ['loyal3', '❤️', 'Treue Seele', '3 Kästen derselben Sorte gekauft', cratesPerBeer, 3],
+    ['af10', '🧃', 'Klarer Kopf', '10 alkoholfreie Biere', afCount, 10],
+    ['notes10', '✍️', 'Kritiker', '10 Tastings mit Notiz', tastings.filter((t) => t.note).length, 10],
+    ['photos10', '📸', 'Fotograf', '10 Tastings mit Foto', tastings.filter((t) => t.photo).length, 10],
+    ['perfect', '⭐', 'Volltreffer', 'Ein Bier mit 5 Sternen bewertet', perfect, 1],
+  ];
+  return def.map(([id, icon, title, desc, value, goal]) => ({ id, icon, title, desc, value: Math.min(value, goal), goal, done: value >= goal }));
+}

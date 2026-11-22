@@ -166,3 +166,50 @@ test('Hinweise: Einzelflasche löst keinen Nachkauf aus, Wegklicken wirkt', () =
   const keys = M.alerts(s, {}, now).map((x) => x.key);
   assert.equal(M.activeAlerts(s, {}, keys, now).length, 0);
 });
+
+import { findStyle, BINGO_STYLES } from '../js/styles.js';
+
+test('Stil-Zuordnung aus freier Eingabe', () => {
+  assert.equal(findStyle('Pilsener').id, 'pils');
+  assert.equal(findStyle('Hefeweizen').id, 'weissbier');
+  assert.equal(findStyle('Bayerisches Hefeweizen dunkel').id, 'weissbier');
+  assert.equal(findStyle('Märzen').id, 'maerzen');
+  assert.equal(findStyle('Kölsch').id, 'koelsch');
+  assert.equal(findStyle('Hazy IPA').id, 'ipa');
+  assert.equal(findStyle(''), null);
+  assert.equal(findStyle('Fantasie'), null);
+});
+
+test('Orte: Gruppierung, Note, Koordinaten, nächster Ort', () => {
+  const s = fixture();
+  s.tastings.push({ id: 't4', beerId: 'rb', ts: '2026-11-06T19:00:00.000Z', rating: 3, tags: [], location: ' biergarten ', lat: 48.15, lon: 11.58, ml: 500 });
+  const places = M.placeStats(s);
+  assert.equal(places.length, 1);
+  assert.equal(places[0].count, 2);
+  assert.equal(places[0].avgRating, 4);
+  assert.equal(places[0].name, 'biergarten');
+  assert.equal(places[0].lat, 48.15);
+  assert.equal(M.nearestPlace(s, 48.1505, 11.5805)?.key, 'biergarten');
+  assert.equal(M.nearestPlace(s, 48.2, 11.6), null);
+  assert.ok(Math.abs(M.haversineKm(52.52, 13.405, 48.137, 11.575) - 504) < 2); // Berlin–München
+});
+
+test('Erfolge und Bingo', () => {
+  const s = fixture();
+  s.beers[0].country = 'DE';
+  s.beers[2].country = 'DE';
+  const b = Object.fromEntries(M.badges(s, findStyle).map((x) => [x.id, x]));
+  assert.equal(b.first.done, true);
+  assert.equal(b.crate1.done, true);      // c2 ist leer
+  assert.equal(b.perfect.done, true);     // Augustiner 5 Sterne
+  assert.equal(b.taster10.value, 3);
+  assert.equal(b.taster10.done, false);
+  const sb = M.styleBingo(s, BINGO_STYLES, findStyle);
+  assert.equal(sb.length, 16);
+  assert.deepEqual(sb.filter((x) => x.done).map((x) => x.id).sort(), ['helles', 'pils']);
+  const cb = M.countryBingo(s);
+  assert.deepEqual(cb.filter((x) => x.done).map((x) => x.code), ['DE']);
+  const all = Array.from({ length: 16 }, (_, i) => ({ done: i < 4 || i % 4 === 0 }));
+  assert.equal(M.bingoLines(all), 2); // erste Zeile + erste Spalte
+  assert.equal(M.countryFlag('DE'), '🇩🇪');
+});

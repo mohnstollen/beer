@@ -36,7 +36,7 @@ export function clear(el) {
 
 const sheetStack = [];
 
-export function openSheet({ title, body, saveLabel = 'Speichern', onSave = null, footer = null }) {
+export function openSheet({ title, body, saveLabel = 'Speichern', onSave = null, footer = null, onClose = null }) {
   const root = document.getElementById('sheets');
   const saveBtn = onSave
     ? h('button', { class: 'sheet-save', type: 'button' }, saveLabel)
@@ -52,7 +52,7 @@ export function openSheet({ title, body, saveLabel = 'Speichern', onSave = null,
   const wrap = h('div', { class: 'sheet-wrap' }, backdrop, sheet);
   root.append(wrap);
   document.body.classList.add('sheet-open');
-  const entry = { wrap, onSave };
+  const entry = { wrap, onSave, onClose };
   sheetStack.push(entry);
   if (onSave) {
     saveBtn.addEventListener('click', async () => {
@@ -74,6 +74,7 @@ export function closeSheet(entry = sheetStack[sheetStack.length - 1]) {
   const i = sheetStack.indexOf(entry);
   if (i === -1) return;
   sheetStack.splice(i, 1);
+  try { entry.onClose?.(); } catch { /* ignorieren */ }
   entry.wrap.classList.remove('in');
   setTimeout(() => entry.wrap.remove(), 200);
   if (!sheetStack.length) document.body.classList.remove('sheet-open');

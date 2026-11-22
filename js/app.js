@@ -4,6 +4,8 @@ import {
   h, clear, openSheet, closeSheet, closeAllSheets, toast, field, toggle, segmented, chips, stars,
   stepper, datalist, blobUrl, photoField, barChart, shareBar,
 } from './ui.js';
+import { STYLE_LEXICON, findStyle, BINGO_STYLES } from './styles.js';
+import { scanBarcode, lookupOpenFoodFacts, getPosition, osmLink, openMapSheet } from './extras.js';
 
 const state = { beers: [], crates: [], consumptions: [], tastings: [], meta: {} };
 const ui = {
@@ -12,8 +14,7 @@ const ui = {
   stats: { period: 'month', alc: 'all', groupVariants: false },
 };
 
-const STYLES = ['Pils', 'Helles', 'Export', 'Weißbier', 'Dunkles', 'Märzen', 'Bock', 'Kellerbier', 'Lager',
-  'Radler', 'IPA', 'Pale Ale', 'Stout', 'Porter', 'Kölsch', 'Alt', 'Zwickel', 'Rauchbier', 'Sour'];
+const STYLES = [...STYLE_LEXICON.map((x) => x.name), 'Zwickel', 'Weizenbock', 'Hazy IPA', 'Imperial Stout'];
 
 // ---------- Daten ----------
 
@@ -516,6 +517,7 @@ function viewStats() {
         ? h('ol', { class: 'rank' }, favCount.map((f) => h('li', null, h('span', null, variantLabel(f.beerId)),
           h('span', { class: 'muted' }, `${f.bottles}× · ${M.fmtLiters(f.ml)}`))))
         : h('p', { class: 'muted' }, 'Noch nichts getrunken.')),
+    placesCard(),
     h('section', { class: 'card' },
       h('h3', null, 'Kästen'),
       h('dl', { class: 'kv' },
@@ -543,6 +545,7 @@ function viewMore() {
             h('div', { class: 'entry-title' }, h('strong', null, b.name)),
             h('div', { class: 'entry-sub' }, beerSubtitle(b))))))
         : h('p', { class: 'muted' }, 'Noch keine Sorten.')),
+    discoverCard(),
     alertSettingsCard(),
     h('section', { class: 'card' },
       h('h3', null, 'Tasting-Tags'),
@@ -565,6 +568,176 @@ function viewMore() {
       importInput,
       state.meta.lastExport ? h('p', { class: 'muted' }, `Letzter Export: ${dayFmt.format(new Date(state.meta.lastExport))}`) : null),
     h('p', { class: 'muted center small' }, 'Beer Tracker · offline-fähige PWA'));
+}
+
+function discoverCard() {
+  const earned = M.badges(state, findStyle).filter((b) => b.done).length;
+  const places = M.placeStats(state).length;
+  const item = (icon, title, sub, onclick) => h('button', { type: 'button', class: 'entry', onclick },
+    h('span', { class: 'entry-icon' }, icon),
+    h('div', { class: 'entry-main' }, h('div', { class: 'entry-title' }, h('strong', null, title)), h('div', { class: 'entry-sub' }, sub)),
+    h('span', { class: 'muted' }, '›'));
+  return h('section', { class: 'card list' },
+    item('🏅', 'Erfolge & Bingo', `${earned} Abzeichen · Stil- und Länder-Bingo`, openBadgesSheet),
+    item('📍', 'Orte', places ? `${places} ${places === 1 ? 'Ort' : 'Orte'} · wo trinke ich was` : 'Noch keine Orte erfasst', openPlacesSheet),
+    item('📖', 'Bierstil-Lexikon', `${STYLE_LEXICON.length} Stile mit Foodpairing`, () => openLexiconSheet()));
+}
+
+// ---------- Orte ----------
+
+function placesCard() {
+  const places = M.placeStats(state);
+  if (!places.length) return null;
+  return h('section', { class: 'card' },
+    h('div', { class: 'section-head' }, h('h3', null, 'Wo trinke ich was?'),
+      h('button', { type: 'button', class: 'link', onclick: openPlacesSheet }, 'alle ›')),
+    h('ol', { class: 'rank' }, places.slice(0, 5).map((p) => h('li', null,
+      h('span', null, p.name, h('span', { class: 'muted small' }, ` · ${p.beers.slice(0, 2).map((x) => beerName(x.beerId)).join(', ')}`)),
+      h('span', { class: 'muted' }, `${p.count}×${p.avgRating ? ` · ★ ${M.fmtNumber(p.avgRating, 1)}` : ''}`)))));
+}
+
+function openPlacesSheet() {
+  const places = M.placeStats(state);
+  const withCoords = places.filter((p) => p.lat != null);
+  openSheet({
+    title: 'Orte',
+    body: [
+      withCoords.length ? h('button', {
+        type: 'button', class: 'btn wide',
+        onclick: () => openMapSheet('Karte', withCoords.map((p) => ({
+          lat: p.lat, lon: p.lon, title: p.name, sub: `${p.count}× verkostet`, onClick: () => openPlaceDetail(p),
+        }))),
+      }, `🗺️ Karte (${withCoords.length})`) : h('p', { class: 'muted small' }, 'Tipp: Beim Tasting „Außer Haus“ → „📍 Standort“ speichert den Ort für die Karte.'),
+      places.length ? h('div', { class: 'card list' }, places.map((p) => h('button', { type: 'button', class: 'entry', onclick: () => openPlaceDetail(p) },
+        h('span', { class: 'entry-icon' }, p.lat != null ? '📍' : '🏠'),
+        h('div', { class: 'entry-main' },
+          h('div', { class: 'entry-title' }, h('strong', null, p.name)),
+          h('div', { class: 'entry-sub' }, `${p.count}× · ${p.beers.slice(0, 3).map((x) => beerName(x.beerId)).join(', ')}`)),
+        h('span', { class: 'entry-time' }, p.avgRating ? `★ ${M.fmtNumber(p.avgRating, 1)}` : '')))) : emptyState('Noch keine Tastings außer Haus.', null),
+    ],
+  });
+}
+
+function openPlaceDetail(place) {
+  const sheet = openSheet({
+    title: place.name,
+    body: [
+      h('div', { class: 'card' }, h('dl', { class: 'kv' },
+        h('dt', null, 'Besuche'), h('dd', null, String(place.count)),
+        h('dt', null, 'Ø Note'), h('dd', null, place.avgRating ? `★ ${M.fmtNumber(place.avgRating, 1)}` : '–'),
+        h('dt', null, 'Zuletzt'), h('dd', null, dayFmt.format(new Date(place.lastTs))),
+        h('dt', null, 'Sorten'), h('dd', null, place.beers.map((x) => `${beerName(x.beerId)}${x.n > 1 ? ` (${x.n}×)` : ''}`).join(', ')))),
+      place.lat != null ? h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn', onclick: () => openMapSheet(place.name, [{ lat: place.lat, lon: place.lon, title: place.name }]) }, '🗺️ Karte'),
+        h('a', { class: 'btn', href: osmLink(place.lat, place.lon), target: '_blank', rel: 'noopener' }, 'In OpenStreetMap öffnen')) : null,
+      h('h3', { class: 'label' }, 'Tastings'),
+      h('div', { class: 'card list' }, place.tastings.map((t) => h('button', {
+        type: 'button', class: 'entry', onclick: () => { closeSheet(sheet); openTastingSheet({ tasting: t }); },
+      }, t.photo ? h('img', { class: 'thumb', src: blobUrl(t.photo), alt: '' }) : h('span', { class: 'entry-icon' }, '★'),
+      h('div', { class: 'entry-main' },
+        h('div', { class: 'entry-title' }, h('strong', null, beerName(t.beerId)), t.rating ? stars(t.rating, null, { size: 'sm', readonly: true }) : null),
+        h('div', { class: 'entry-sub' }, [(t.tags || []).join(', '), t.note].filter(Boolean).join(' · '))),
+      h('span', { class: 'entry-time' }, fmtDay(M.toDateKey(t.ts)))))),
+    ],
+  });
+}
+
+// ---------- Erfolge & Bingo ----------
+
+function bingoGrid(cells, render) {
+  return h('div', { class: 'bingo' }, cells.map((c) => h('div', { class: 'bingo-cell' + (c.done ? ' done' : ''), title: render(c).title },
+    h('span', { class: 'bingo-icon' }, render(c).icon), h('span', { class: 'bingo-label' }, render(c).label))));
+}
+
+function openBadgesSheet() {
+  const list = M.badges(state, findStyle);
+  const done = list.filter((b) => b.done).length;
+  const sb = M.styleBingo(state, BINGO_STYLES, findStyle);
+  const cb = M.countryBingo(state);
+  const lex = new Map(STYLE_LEXICON.map((x) => [x.id, x]));
+  const unknownCountry = state.beers.filter((b) => !b.country).length;
+  const linesText = (cells) => {
+    const n = M.bingoLines(cells);
+    const k = cells.filter((c) => c.done).length;
+    return `${k}/16 Felder${n ? ` · ${n} Bingo${n > 1 ? 's' : ''}! 🎉` : ''}`;
+  };
+  openSheet({
+    title: 'Erfolge & Bingo',
+    body: [
+      h('section', { class: 'card' },
+        h('div', { class: 'section-head' }, h('h3', null, 'Abzeichen'), h('span', { class: 'muted' }, `${done}/${list.length}`)),
+        h('div', { class: 'badges' }, list.map((b) => h('div', { class: 'badge' + (b.done ? ' done' : '') },
+          h('span', { class: 'badge-icon', 'aria-hidden': 'true' }, b.icon),
+          h('strong', null, b.title),
+          h('span', { class: 'muted small' }, b.desc),
+          b.done ? h('span', { class: 'badge-ok' }, '✓ geschafft')
+            : h('div', { class: 'progress', role: 'img', 'aria-label': `${b.value} von ${b.goal}` }, h('div', { style: { width: `${(b.value / b.goal) * 100}%` } })),
+          b.done ? null : h('span', { class: 'muted small' }, `${b.value}/${b.goal}`))))),
+      h('section', { class: 'card' },
+        h('div', { class: 'section-head' }, h('h3', null, 'Stil-Bingo'), h('span', { class: 'muted small' }, linesText(sb))),
+        bingoGrid(sb, (c) => {
+          const st = lex.get(c.id);
+          return { icon: c.done ? '✓' : '·', label: st.name, title: c.done ? c.beerIds.map(beerName).join(', ') : st.description };
+        }),
+        h('p', { class: 'muted small' }, 'Zählt, sobald eine Sorte des Stils getrunken wurde. Der Stil wird aus dem Feld „Stil“ der Sorte erkannt.')),
+      h('section', { class: 'card' },
+        h('div', { class: 'section-head' }, h('h3', null, 'Länder-Bingo'), h('span', { class: 'muted small' }, linesText(cb))),
+        bingoGrid(cb, (c) => ({ icon: M.countryFlag(c.code), label: M.countryName(c.code), title: c.done ? c.beerIds.map(beerName).join(', ') : '' })),
+        unknownCountry ? h('p', { class: 'muted small' }, `${unknownCountry} ${unknownCountry === 1 ? 'Sorte hat' : 'Sorten haben'} noch kein Land – unter Mehr → Sorten ergänzen.`) : null),
+    ],
+  });
+}
+
+// ---------- Bierstil-Lexikon ----------
+
+function openLexiconSheet() {
+  const listEl = h('div', { class: 'card list' });
+  const search = h('input', { type: 'search', placeholder: 'Stil oder Speise suchen, z. B. „Käse“', class: 'search' });
+  const renderList = () => {
+    clear(listEl);
+    const q = search.value.trim().toLowerCase();
+    const items = STYLE_LEXICON.filter((st) => !q || [st.name, ...st.aliases, st.description, st.aroma, ...st.food].join(' ').toLowerCase().includes(q));
+    if (!items.length) listEl.append(h('p', { class: 'muted center' }, 'Nichts gefunden.'));
+    for (const st of items) {
+      const mine = state.beers.filter((b) => findStyle(b.style)?.id === st.id).length;
+      listEl.append(h('button', { type: 'button', class: 'entry', onclick: () => openStyleDetail(st) },
+        h('div', { class: 'entry-main' },
+          h('div', { class: 'entry-title' }, h('strong', null, st.name), h('span', { class: 'muted small' }, st.abv)),
+          h('div', { class: 'entry-sub' }, `${st.group} · ${st.aroma}`)),
+        mine ? h('span', { class: 'pill' }, `${mine}`) : h('span', { class: 'muted' }, '›')));
+    }
+  };
+  search.addEventListener('input', renderList);
+  renderList();
+  openSheet({ title: 'Bierstil-Lexikon', body: [search, listEl] });
+}
+
+function openStyleDetail(st) {
+  const mine = state.beers.filter((b) => findStyle(b.style)?.id === st.id);
+  const ratings = M.favoritesByRating(state);
+  const avgOf = (id) => ratings.find((r) => r.beerId === id)?.avg;
+  openSheet({
+    title: st.name,
+    body: [
+      h('p', null, st.description),
+      h('div', { class: 'card' }, h('dl', { class: 'kv' },
+        h('dt', null, 'Gärung'), h('dd', null, st.group),
+        h('dt', null, 'Alkohol'), h('dd', null, st.abv),
+        h('dt', null, 'Farbe'), h('dd', null, st.color),
+        h('dt', null, 'Bittere'), h('dd', null, st.bitter),
+        h('dt', null, 'Aroma'), h('dd', null, st.aroma),
+        h('dt', null, 'Glas'), h('dd', null, st.glass),
+        h('dt', null, 'Trinktemperatur'), h('dd', null, st.temp))),
+      h('h3', { class: 'label' }, '🍽️ Passt gut zu'),
+      h('div', { class: 'chips' }, st.food.map((f) => h('span', { class: 'chip static' }, f))),
+      h('h3', { class: 'label' }, `Deine Sorten (${mine.length})`),
+      mine.length ? h('div', { class: 'card list' }, mine.map((b) => h('div', { class: 'entry' },
+        h('div', { class: 'entry-main' }, h('div', { class: 'entry-title' }, h('strong', null, b.name)), h('div', { class: 'entry-sub' }, beerSubtitle(b))),
+        avgOf(b.id) ? h('span', { class: 'entry-time' }, `★ ${M.fmtNumber(avgOf(b.id), 1)}`) : null)))
+        : h('p', { class: 'muted small' }, 'Noch keine Sorte mit diesem Stil.'),
+      st.aliases.length ? h('p', { class: 'muted small' }, `Auch: ${st.aliases.join(', ')}`) : null,
+    ],
+  });
 }
 
 function alertSettingsCard() {
@@ -601,7 +774,8 @@ function alertSettingsCard() {
 
 function beerSubtitle(b) {
   const variantOf = b.variantOf ? beersById().get(b.variantOf) : null;
-  return [b.brewery, b.style, M.isAlcoholFree(b) ? 'alkoholfrei' : (b.abv != null ? `${M.fmtNumber(b.abv)} %` : null),
+  return [b.country ? `${M.countryFlag(b.country)} ${b.brewery || M.countryName(b.country)}` : b.brewery, b.style,
+    M.isAlcoholFree(b) ? 'alkoholfrei' : (b.abv != null ? `${M.fmtNumber(b.abv)} %` : null),
     variantOf ? `Variante von ${variantOf.name}` : null].filter(Boolean).join(' · ');
 }
 
@@ -614,12 +788,17 @@ function beerPicker(initialId, onChange) {
     clear(wrap);
     if (selected) {
       const b = beersById().get(selected);
+      const abvMissing = b && !M.isAlcoholFree(b) && b.abv == null;
       wrap.append(h('div', { class: 'picked' },
-        h('div', null, h('strong', null, b?.name || '?'), h('div', { class: 'muted small' }, b ? beerSubtitle(b) : '')),
-        h('button', { type: 'button', class: 'link', onclick: () => { selected = null; onChange(null); render(); input.focus(); } }, 'ändern')));
+        h('div', { class: 'picked-main' }, h('strong', null, b?.name || '?'), h('div', { class: 'muted small' }, b ? beerSubtitle(b) : ''),
+          abvMissing ? h('div', { class: 'warn small' }, 'Alkoholgehalt fehlt') : null),
+        h('div', { class: 'picked-actions' },
+          b ? h('button', { type: 'button', class: 'link', onclick: () => openBeerSheet({ beer: b, onSaved: () => render() }) }, 'bearbeiten') : null,
+          h('button', { type: 'button', class: 'link', onclick: () => { selected = null; onChange(null); render(); input.focus(); } }, 'ändern'))));
       return;
     }
-    wrap.append(input, results);
+    wrap.append(h('div', { class: 'search-row' }, input,
+      h('button', { type: 'button', class: 'btn scan-btn', 'aria-label': 'Barcode scannen', onclick: () => scanForBeer(pick) }, '▥ Scan')), results);
     renderResults();
   };
   const results = h('div', { class: 'picker-results' });
@@ -643,6 +822,29 @@ function beerPicker(initialId, onChange) {
   }
   render();
   return { el: wrap, get value() { return selected; } };
+}
+
+/** Barcode scannen → bekannte Sorte wählen oder neue Sorte mit Open-Food-Facts-Daten anlegen. */
+async function scanForBeer(pick) {
+  const ean = await scanBarcode();
+  if (!ean) return;
+  const known = state.beers.find((b) => b.ean === ean);
+  if (known) { pick(known.id); toast(`${known.name} erkannt`); return; }
+  let info = null;
+  if (navigator.onLine !== false) {
+    toast('Suche in Open Food Facts …', { duration: 8000 });
+    try { info = await lookupOpenFoodFacts(ean); } catch { info = null; }
+  }
+  const prefill = { ean, name: info?.name || '', brewery: info?.brewery || '', abv: info?.abv ?? null };
+  toast(info ? 'Daten aus Open Food Facts übernommen – bitte prüfen' : `EAN ${ean} nicht gefunden – bitte Sorte anlegen`);
+  // Gibt es die Sorte schon ohne EAN? Dann nachfragen, ob sie verknüpft werden soll.
+  const sameName = info?.name && state.beers.find((b) => !b.ean && M.placeKey(b.name) === M.placeKey(info.name));
+  if (sameName && confirm(`„${sameName.name}“ gibt es schon. Barcode mit dieser Sorte verknüpfen?`)) {
+    await save('beers', { ...sameName, ean });
+    pick(sameName.id);
+    return;
+  }
+  openBeerSheet({ prefill, onSaved: (b) => pick(b.id) });
 }
 
 // ---------- Sheet: Getrunken (Kastenauswahl, Menge, Zeit) ----------
@@ -744,7 +946,32 @@ function openTastingSheet({ tasting = null, beerId = null, crateId = null } = {}
 
   const locations = M.suggestions(state.tastings.map((x) => x.location));
   const locInput = h('input', { type: 'text', list: 'dl-locations', placeholder: 'z. B. Biergarten am See', value: t.location || '' });
-  const locField = field('Ort', h('div', null, locInput, datalist('dl-locations', locations)));
+  let coords = typeof t.lat === 'number' ? { lat: t.lat, lon: t.lon } : null;
+  const gpsStatus = h('span', { class: 'muted small' });
+  const gpsBtn = h('button', { type: 'button', class: 'btn small ghost' }, '📍 Standort');
+  const syncGps = () => {
+    gpsStatus.textContent = coords ? 'Standort gespeichert' : '';
+    gpsBtn.textContent = coords ? '📍 entfernen' : '📍 Standort';
+  };
+  gpsBtn.addEventListener('click', async () => {
+    if (coords) { coords = null; syncGps(); return; }
+    gpsStatus.textContent = 'Standort wird ermittelt …';
+    try {
+      const pos = await getPosition();
+      coords = { lat: pos.lat, lon: pos.lon };
+      syncGps();
+      const near = M.nearestPlace(state, pos.lat, pos.lon);
+      if (near && !locInput.value.trim()) {
+        locInput.value = near.name;
+        gpsStatus.textContent = `Bekannter Ort erkannt: ${near.name}`;
+      }
+    } catch (err) {
+      gpsStatus.textContent = err.message;
+    }
+  });
+  syncGps();
+  const locField = field('Ort', h('div', { class: 'stack-sm' }, locInput, datalist('dl-locations', locations),
+    h('div', { class: 'gps-row' }, gpsBtn, gpsStatus)));
   const away = toggle('Außer Haus', !!t.location, () => syncVisibility());
 
   function syncVisibility() {
@@ -800,6 +1027,8 @@ function openTastingSheet({ tasting = null, beerId = null, crateId = null } = {}
         note: note.value.trim(),
         photo: photo.value,
         location: isAway ? locInput.value.trim() : '',
+        lat: isAway && coords ? coords.lat : null,
+        lon: isAway && coords ? coords.lon : null,
         crateId: linkedCrate ? linkedCrate.id : null,
         ml: linkedCrate ? linkedCrate.unitMl : (data.ml || M.DEFAULT_TASTING_ML),
         price: M.parseEuro(price.value),
@@ -950,13 +1179,33 @@ function openCrateDetail(crate) {
 
 // ---------- Sheet: Sorte ----------
 
-function openBeerSheet({ beer = null, name = '', onSaved = null } = {}) {
-  const b = beer || {};
+function openBeerSheet({ beer = null, name = '', prefill = null, onSaved = null } = {}) {
+  const b = beer || prefill || {};
   const editing = !!beer;
   const nameInput = h('input', { type: 'text', placeholder: 'z. B. Radeberger Pilsner', value: b.name || name });
   const brewery = h('input', { type: 'text', list: 'dl-breweries', value: b.brewery || '' });
   const style = h('input', { type: 'text', list: 'dl-styles', value: b.style || '' });
+  const styleInfo = h('div', { class: 'style-info' });
+  const syncStyleInfo = () => {
+    clear(styleInfo);
+    const st = findStyle(style.value);
+    if (st) {
+      styleInfo.append(h('button', { type: 'button', class: 'link small', onclick: () => openStyleDetail(st) },
+        `ℹ️ ${st.name}: ${st.abv}, ${st.bitter} – Lexikon & Foodpairing`));
+    }
+  };
+  style.addEventListener('input', syncStyleInfo);
+  syncStyleInfo();
+  const country = h('select', { value: b.country || '' },
+    h('option', { value: '' }, '— unbekannt —'),
+    [...M.COUNTRIES].sort((x, y) => x.name.localeCompare(y.name, 'de')).map((c) => h('option', { value: c.code }, `${M.countryFlag(c.code)} ${c.name}`)));
+  const ean = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'für den Barcode-Scan', value: b.ean || '' });
+  const eanScan = h('button', {
+    type: 'button', class: 'btn scan-btn', 'aria-label': 'Barcode scannen',
+    onclick: async () => { const code = await scanBarcode(); if (code) ean.value = code; },
+  }, '▥ Scan');
   const abv = h('input', { type: 'text', inputmode: 'decimal', placeholder: '4,9', value: b.abv != null && !b.alcoholFree ? String(b.abv).replace('.', ',') : '' });
+  if (editing && b.abv == null && !b.alcoholFree) setTimeout(() => abv.focus(), 300);
   const abvField = field('Alkohol (% vol)', abv);
   const af = toggle('Alkoholfrei', !!b.alcoholFree, (v) => { abvField.hidden = v; });
   abvField.hidden = !!b.alcoholFree;
@@ -975,10 +1224,12 @@ function openBeerSheet({ beer = null, name = '', onSaved = null } = {}) {
     body: [
       field('Name', nameInput),
       field('Brauerei', h('div', null, brewery, datalist('dl-breweries', breweries))),
-      field('Stil', h('div', null, style, datalist('dl-styles', styles))),
+      field('Stil', h('div', null, style, datalist('dl-styles', styles), styleInfo)),
+      field('Land', country),
       af.el,
       abvField,
       field('Variante von', variant, 'z. B. „alkoholfreie Variante von …“ – für gemeinsame Auswertung'),
+      field('EAN / Barcode', h('div', { class: 'search-row' }, ean, eanScan)),
       photo.el,
     ],
     footer: editing ? h('button', {
@@ -994,16 +1245,22 @@ function openBeerSheet({ beer = null, name = '', onSaved = null } = {}) {
       const n = nameInput.value.trim();
       if (!n) { alert('Bitte einen Namen eingeben.'); return false; }
       const isAf = af.input.checked;
+      const code = ean.value.replace(/\D/g, '') || null;
+      const dupe = code && state.beers.find((x) => x.ean === code && x.id !== b.id);
+      if (dupe) { alert(`Dieser Barcode gehört schon zu „${dupe.name}“.`); return false; }
       const rec = {
-        id: b.id || db.uid(),
+        ...(editing ? b : {}),
+        id: (editing && b.id) || db.uid(),
         name: n,
         brewery: brewery.value.trim(),
         style: style.value.trim(),
         alcoholFree: isAf,
         abv: isAf ? 0 : M.parseDecimal(abv.value),
         variantOf: variant.value || null,
+        country: country.value || null,
+        ean: code,
         photo: photo.value,
-        createdAt: b.createdAt || nowIso(),
+        createdAt: (editing && b.createdAt) || nowIso(),
       };
       await save('beers', rec);
       onSaved?.(rec);

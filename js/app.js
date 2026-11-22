@@ -5,6 +5,8 @@ import {
   stepper, datalist, blobUrl, photoField, barChart, shareBar,
 } from './ui.js';
 import { STYLE_LEXICON, findStyle, BINGO_STYLES } from './styles.js';
+import { SYNC_STORES, SYNCED_SETTINGS, SYNC_FORMAT, mergeSnapshots, mergeTombstones, folderUrl } from './sync-core.js';
+import { createClient, SyncError } from './sync.js';
 import { scanBarcode, lookupOpenFoodFacts, getPosition, osmLink, openMapSheet } from './extras.js';
 
 const state = { beers: [], crates: [], consumptions: [], tastings: [], meta: {} };
@@ -26,24 +28,47 @@ const alertSettings = () => ({ ...M.DEFAULT_ALERT_SETTINGS, ...(state.meta.alert
 const currentAlerts = () => M.activeAlerts(state, alertSettings(), state.meta.dismissedAlerts || []);
 const nowIso = () => new Date().toISOString();
 
-async function save(store, obj) {
+/** Speichert einen Eintrag; setzt updatedAt und bei Fotoänderung eine neue photoRef (für den Sync). */
+async function save(store, input) {
+  const prev = state[store].find((x) => x.id === input.id);
+  const obj = { ...input, updatedAt: nowIso() };
+  if ('photo' in obj) {
+    if (!obj.photo) obj.photoRef = null;
+    else if (prev && prev.photo === obj.photo && prev.photoRef) obj.photoRef = prev.photoRef;
+    else if (!obj.photoRef || prev?.photo !== obj.photo) obj.photoRef = db.uid();
+  }
   await db.put(store, obj);
   const arr = state[store];
   const i = arr.findIndex((x) => x.id === obj.id);
   if (i === -1) arr.push(obj); else arr[i] = obj;
   render();
+  markChanged();
   return obj;
 }
 
 async function remove(store, id) {
   await db.del(store, id);
   state[store] = state[store].filter((x) => x.id !== id);
+  await addTombstones([{ store, id, ts: nowIso() }]);
   render();
+  markChanged();
+}
+
+async function addTombstones(list) {
+  const value = mergeTombstones(state.meta.tombstones || [], list);
+  await db.put('meta', { key: 'tombstones', value });
+  state.meta.tombstones = value;
 }
 
 async function saveMeta(key, value) {
   await db.put('meta', { key, value });
   state.meta[key] = value;
+  if (SYNCED_SETTINGS.includes(key)) {
+    const metaTs = { ...(state.meta.metaTs || {}), [key]: nowIso() };
+    await db.put('meta', { key: 'metaTs', value: metaTs });
+    state.meta.metaTs = metaTs;
+    markChanged();
+  }
   render();
 }
 
@@ -651,6 +676,7 @@ function viewMore() {
             h('div', { class: 'entry-sub' }, beerSubtitle(b))))))
         : h('p', { class: 'muted' }, 'Noch keine Sorten.')),
     discoverCard(),
+    syncCard(),
     alertSettingsCard(),
     h('section', { class: 'card' },
       h('h3', null, 'Tasting-Tags'),
@@ -1208,7 +1234,7 @@ function openCrateSheet({ crate = null, beerId = null, template = null } = {}) {
       };
       // Bestehende Konsum-Einträge an geänderte Flaschengröße anpassen
       if (editing && rec.unitMl !== crate.unitMl) {
-        const ops = state.consumptions.filter((x) => x.crateId === rec.id).map((x) => ({ ...x, ml: x.qty * rec.unitMl }));
+        const ops = state.consumptions.filter((x) => x.crateId === rec.id).map((x) => ({ ...x, ml: x.qty * rec.unitMl, updatedAt: nowIso() }));
         await db.batch(ops.map((x) => ({ store: 'consumptions', put: x })));
         for (const x of ops) Object.assign(state.consumptions.find((y) => y.id === x.id), x);
       }
@@ -1228,12 +1254,14 @@ async function deleteCrate(crate) {
   const ops = [
     { store: 'crates', del: crate.id },
     ...state.consumptions.filter((x) => x.crateId === crate.id).map((x) => ({ store: 'consumptions', del: x.id })),
-    ...linked.map((x) => ({ store: 'tastings', put: { ...x, crateId: null } })),
+    ...linked.map((x) => ({ store: 'tastings', put: { ...x, crateId: null, updatedAt: nowIso() } })),
   ];
   await db.batch(ops);
+  await addTombstones(ops.filter((o) => o.del).map((o) => ({ store: o.store, id: o.del, ts: nowIso() })));
+  markChanged();
   state.crates = state.crates.filter((x) => x.id !== crate.id);
   state.consumptions = state.consumptions.filter((x) => x.crateId !== crate.id);
-  state.tastings = state.tastings.map((x) => (x.crateId === crate.id ? { ...x, crateId: null } : x));
+  state.tastings = state.tastings.map((x) => (x.crateId === crate.id ? { ...x, crateId: null, updatedAt: nowIso() } : x));
   closeAllSheets();
   render();
   toast('Kasten gelöscht');
@@ -1374,6 +1402,228 @@ function openBeerSheet({ beer = null, name = '', prefill = null, onSaved = null 
   if (!editing) setTimeout(() => nameInput.focus(), 250);
 }
 
+// ---------- Synchronisation (WebDAV / Nextcloud) ----------
+
+const sync = { running: false, again: false, timer: null, rev: 0, status: null, errorShown: false, listenersOn: false };
+const syncConfig = () => (state.meta.sync?.enabled ? state.meta.sync : null);
+const PHOTO_STORES = ['beers', 'tastings'];
+
+function markChanged() {
+  sync.rev += 1;
+  scheduleSync();
+}
+
+function scheduleSync(delay = 3000) {
+  if (!syncConfig()) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(() => runSync(), delay);
+}
+
+function setSyncStatus(status) {
+  sync.status = status;
+  for (const el of document.querySelectorAll('.sync-status')) el.replaceWith(syncStatusEl());
+}
+
+function syncStatusEl() {
+  const st = sync.status;
+  const last = state.meta.lastSync ? `zuletzt ${dayLabel(state.meta.lastSync).replace(/^Heute$/, 'heute').replace(/^Gestern$/, 'gestern')} ${timeFmt.format(new Date(state.meta.lastSync))}` : 'noch nicht synchronisiert';
+  if (st?.state === 'running') return h('p', { class: 'sync-status muted small' }, '⟳ Synchronisiere …');
+  if (st?.state === 'error') return h('p', { class: 'sync-status warn small' }, `⚠️ ${st.message}`);
+  return h('p', { class: 'sync-status muted small' }, `✓ ${last}`);
+}
+
+function localSnapshot() {
+  const ts = state.meta.metaTs || {};
+  const settings = {};
+  for (const k of SYNCED_SETTINGS) if (state.meta[k] !== undefined) settings[k] = { value: state.meta[k], ts: ts[k] || '' };
+  return {
+    stores: Object.fromEntries(SYNC_STORES.map((s) => [s, state[s]])),
+    tombstones: state.meta.tombstones || [],
+    settings,
+  };
+}
+
+/** Ältere Einträge mit Foto, aber ohne photoRef, bekommen eine (einmalig). */
+async function ensurePhotoRefs() {
+  for (const store of PHOTO_STORES) {
+    for (const r of state[store]) {
+      if (r.photo && !r.photoRef) {
+        r.photoRef = db.uid();
+        r.updatedAt = nowIso();
+        await db.put(store, r);
+      }
+    }
+  }
+}
+
+async function applyMerged(merged, blobs) {
+  const next = {};
+  for (const s of SYNC_STORES) {
+    next[s] = merged.stores[s].map((r) => (PHOTO_STORES.includes(s)
+      ? { ...r, photo: r.photoRef && blobs.has(r.photoRef) ? blobs.get(r.photoRef) : null }
+      : r));
+  }
+  const meta = { ...state.meta, tombstones: merged.tombstones, metaTs: { ...(state.meta.metaTs || {}) } };
+  for (const [k, v] of Object.entries(merged.settings)) {
+    if (!SYNCED_SETTINGS.includes(k) || !v) continue;
+    meta[k] = v.value;
+    meta.metaTs[k] = v.ts;
+  }
+  await db.replaceAll({ ...next, meta });
+  Object.assign(state, next);
+  state.meta = meta;
+}
+
+async function downloadMissingPhotos(client, remoteRefs) {
+  let changed = false;
+  for (const store of PHOTO_STORES) {
+    for (const r of state[store]) {
+      if (!r.photoRef || r.photo || !remoteRefs.has(r.photoRef)) continue;
+      try {
+        const blob = await client.getPhoto(r.photoRef);
+        if (blob) { r.photo = blob; await db.put(store, r); changed = true; }
+      } catch { /* nächster Sync versucht es erneut */ }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Ein Sync-Durchlauf: Server-Stand holen → zusammenführen → Fotos hochladen → Server aktualisieren →
+ * lokal übernehmen → fehlende Fotos laden. Wird lokal währenddessen etwas geändert, läuft er erneut.
+ */
+async function runSync({ manual = false, config = null } = {}) {
+  const cfg = config || syncConfig();
+  if (!cfg) return false;
+  if (sync.running) { sync.again = true; return false; }
+  sync.running = true;
+  setSyncStatus({ state: 'running' });
+  let ok = false;
+  try {
+    const client = createClient(cfg);
+    await ensurePhotoRefs();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const rev = sync.rev;
+      const remote = await client.getData();
+      if (!remote) await client.ensureFolders();
+      else if (remote.app !== 'beer-tracker') throw new SyncError('Im Ordner liegt eine fremde Datei „beer-sync.json“.');
+      else if ((remote.format || 1) > SYNC_FORMAT) throw new SyncError('Die Daten auf dem Server stammen von einer neueren App-Version – bitte App neu laden.');
+
+      const blobs = new Map();
+      for (const store of PHOTO_STORES) for (const r of state[store]) if (r.photo && r.photoRef) blobs.set(r.photoRef, r.photo);
+      const { merged, localChanged, remoteChanged } = mergeSnapshots(localSnapshot(), remote);
+
+      const remoteRefs = new Set(remote?.photoRefs || []);
+      const needed = new Set();
+      for (const store of PHOTO_STORES) for (const r of merged.stores[store]) if (r.photoRef) needed.add(r.photoRef);
+      let photosUploaded = false;
+      for (const ref of needed) {
+        if (!remoteRefs.has(ref) && blobs.has(ref)) {
+          await client.putPhoto(ref, blobs.get(ref));
+          remoteRefs.add(ref);
+          photosUploaded = true;
+        }
+      }
+      const photoRefs = [...remoteRefs].filter((r) => needed.has(r)).sort();
+      if (!remote || remoteChanged || photosUploaded || photoRefs.length !== (remote.photoRefs || []).length) {
+        await client.putData({ app: 'beer-tracker', format: SYNC_FORMAT, updatedAt: nowIso(), ...merged, photoRefs });
+      }
+      if (rev !== sync.rev) continue; // lokal wurde währenddessen geändert → noch einmal
+      if (localChanged) { await applyMerged(merged, blobs); render(); }
+      if (await downloadMissingPhotos(client, remoteRefs)) render();
+      ok = true;
+      break;
+    }
+    if (ok) {
+      const now = nowIso();
+      await db.put('meta', { key: 'lastSync', value: now });
+      state.meta.lastSync = now;
+      sync.errorShown = false;
+      setSyncStatus({ state: 'ok' });
+      if (manual) toast('Synchronisiert ✓');
+    }
+  } catch (err) {
+    const message = err instanceof SyncError ? err.message : `Unerwarteter Fehler: ${err.message}`;
+    setSyncStatus({ state: 'error', message });
+    if (manual) toast(message, { duration: 8000 });
+    else if (!sync.errorShown && err.kind !== 'network') { sync.errorShown = true; toast(`Sync: ${message}`, { duration: 8000 }); }
+  } finally {
+    sync.running = false;
+    if (sync.again) { sync.again = false; scheduleSync(500); }
+  }
+  return ok;
+}
+
+function syncCard() {
+  const cfg = state.meta.sync;
+  if (cfg?.enabled) {
+    let host = cfg.server;
+    try { host = new URL(folderUrl(cfg)).host; } catch { /* egal */ }
+    return h('section', { class: 'card stack' },
+      h('h3', null, '☁️ Synchronisation'),
+      h('p', { class: 'small' }, `Verbunden mit ${host} als ${cfg.user}`, h('br'), h('span', { class: 'muted' }, `Ordner: ${decodeURIComponent(new URL(folderUrl(cfg)).pathname)}`)),
+      syncStatusEl(),
+      h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn small primary', onclick: () => runSync({ manual: true }) }, 'Jetzt synchronisieren'),
+        h('button', {
+          type: 'button', class: 'btn small ghost',
+          onclick: async () => {
+            if (!confirm('Synchronisation trennen? Die Daten bleiben auf diesem Gerät und in der Cloud erhalten.')) return;
+            await db.put('meta', { key: 'sync', value: null });
+            state.meta.sync = null;
+            sync.status = null;
+            render();
+          },
+        }, 'Trennen')));
+  }
+  const server = h('input', { type: 'url', placeholder: 'https://cloud.example.org', autocomplete: 'url', value: cfg?.server || '' });
+  const user = h('input', { type: 'text', autocomplete: 'username', autocapitalize: 'none', value: cfg?.user || '' });
+  const password = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'App-Passwort aus Nextcloud' });
+  const folder = h('input', { type: 'text', value: cfg?.folder || 'BeerTracker' });
+  const status = h('p', { class: 'small' });
+  const connect = h('button', {
+    type: 'button', class: 'btn primary',
+    onclick: async () => {
+      const config = { server: server.value.trim(), user: user.value.trim(), password: password.value, folder: folder.value.trim() || 'BeerTracker', enabled: true };
+      if (!config.server || !config.user || !config.password) { status.className = 'warn small'; status.textContent = 'Bitte Server, Benutzer und App-Passwort angeben.'; return; }
+      if (/^http:\/\//i.test(config.server) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(config.server)) {
+        status.className = 'warn small'; status.textContent = 'Bitte https:// verwenden – das Passwort würde sonst unverschlüsselt übertragen.'; return;
+      }
+      connect.disabled = true;
+      status.className = 'muted small';
+      status.textContent = 'Verbinde …';
+      const ok = await runSync({ manual: false, config });
+      connect.disabled = false;
+      if (!ok) { status.className = 'warn small'; status.textContent = sync.status?.message || 'Verbindung fehlgeschlagen.'; return; }
+      await db.put('meta', { key: 'sync', value: config });
+      state.meta.sync = config;
+      if (!sync.listenersOn) {
+        sync.listenersOn = true;
+        window.addEventListener('online', () => scheduleSync(1000));
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
+      }
+      render();
+      toast('Synchronisation eingerichtet ✓');
+    },
+  }, 'Verbinden');
+  return h('section', { class: 'card stack' },
+    h('h3', null, '☁️ Synchronisation (Nextcloud)'),
+    h('p', { class: 'muted small' }, 'Gleicht alle Daten inkl. Fotos zwischen deinen Geräten über deine Nextcloud ab (WebDAV). Jedes Gerät mit denselben Zugangsdaten verbinden.'),
+    field('Server', server, 'Adresse deiner Nextcloud – oder eine vollständige WebDAV-Ordner-URL'),
+    h('div', { class: 'grid2' }, field('Benutzer', user), field('Ordner', folder)),
+    field('App-Passwort', password, 'Nextcloud → Einstellungen → Sicherheit → „Neues App-Passwort erstellen“'),
+    h('details', { class: 'more' },
+      h('summary', null, 'Einmalige Einrichtung in Nextcloud'),
+      h('ol', { class: 'small help' },
+        h('li', null, 'In Nextcloud als Admin die App „WebAppPassword“ installieren (Apps, Suche „WebAppPassword“).'),
+        h('li', null, 'In den Verwaltungs-Einstellungen der App bei den erlaubten Origins für WebDAV eintragen: ',
+          h('code', null, location.origin),
+          ' – alternativ in der config.php: ', h('code', null, `'webapppassword.origins' => ['${location.origin}'],`)),
+        h('li', null, 'Unter Persönlich → Sicherheit ein App-Passwort für „Beer Tracker“ erzeugen und oben eintragen.')),
+      h('p', { class: 'muted small' }, 'Ohne diese Freigabe blockiert der Browser den Zugriff (CORS). Andere WebDAV-Server funktionieren, wenn sie CORS für diese Adresse erlauben.')),
+    connect, status);
+}
+
 // ---------- Export / Import ----------
 
 function download(filename, blob) {
@@ -1409,7 +1659,7 @@ async function exportJson() {
     crates: state.crates,
     consumptions: state.consumptions,
     tastings: await withPhotos(state.tastings, blobToDataUrl),
-    meta: state.meta,
+    meta: Object.fromEntries(Object.entries(state.meta).filter(([k]) => k !== 'sync')),
   };
   download(`beer-backup-${M.toDateKey(new Date())}.json`, new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
   await saveMeta('lastExport', nowIso());
@@ -1432,11 +1682,12 @@ async function importJson(file) {
       crates: data.crates || [],
       consumptions: data.consumptions || [],
       tastings: await withPhotos(data.tastings || [], dataUrlToBlob),
-      meta: data.meta || {},
+      meta: { ...Object.fromEntries(Object.entries(data.meta || {}).filter(([k]) => k !== 'sync')), ...(state.meta.sync ? { sync: state.meta.sync } : {}) },
     };
     await db.replaceAll(restored);
     Object.assign(state, restored);
     render();
+    markChanged();
     toast('Backup importiert');
   } catch (err) {
     alert(`Import fehlgeschlagen: ${err.message}`);
@@ -1454,6 +1705,12 @@ async function init() {
   }
   render();
   db.requestPersistence();
+  if (syncConfig()) {
+    sync.listenersOn = true;
+    runSync();
+    window.addEventListener('online', () => scheduleSync(1000));
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
+  }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.addEventListener('controllerchange', () => {

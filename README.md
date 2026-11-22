@@ -1,7 +1,8 @@
 # Beer Tracker
 
 Persönliche PWA zum Dokumentieren von Bier-Tastings und zum Tracken von Kasten-Konsum und Vorrat.
-Läuft komplett offline, alle Daten liegen lokal im Browser (IndexedDB). Es gibt keinen Server und keine Accounts.
+Läuft komplett offline, alle Daten liegen lokal im Browser (IndexedDB). Optional können mehrere Geräte über die
+eigene Nextcloud synchronisiert werden (siehe unten).
 
 - Anforderungen: [docs/ANFORDERUNGEN.md](docs/ANFORDERUNGEN.md)
 - UI-Skizze: [docs/UI-SKIZZE.md](docs/UI-SKIZZE.md)
@@ -60,6 +61,33 @@ Einzelflaschen lösen keinen Nachkauf-Hinweis aus.
 Kamera-Scan, Open Food Facts und Kartenkacheln brauchen Netz. Alles andere läuft offline.
 Scanner- und Karten-Bibliothek werden nach dem ersten Laden zwischengespeichert.
 
+## Synchronisation (Nextcloud / WebDAV)
+
+Unter **Mehr → Synchronisation** verbindest du jedes Gerät mit denselben Nextcloud-Zugangsdaten.
+In der Nextcloud liegen dann im Ordner `BeerTracker/` die Datei `beer-sync.json` (alle Daten) und der Ordner `fotos/`.
+
+- Synchronisiert wird automatisch, wenige Sekunden nach jeder Änderung, beim Öffnen der App und wenn das Netz
+  zurückkommt. Zusätzlich gibt es den Knopf „Jetzt synchronisieren“.
+- Zusammenführung pro Eintrag: Die neueste Änderung gewinnt. Löschungen werden übertragen (Löschmarken werden 400 Tage aufbewahrt).
+  Daten, die auf zwei Geräten getrennt erfasst wurden, werden vereinigt und nicht überschrieben.
+- Fotos werden einzeln und nur einmal hochgeladen.
+- Offline erfasste Einträge werden beim nächsten Sync übertragen.
+- Zugangsdaten liegen nur lokal im Browser und sind nicht im JSON-Export enthalten. Verwende dafür ein eigenes,
+  jederzeit widerrufbares **App-Passwort** (Nextcloud → Persönliche Einstellungen → Sicherheit).
+
+**Einmalige Einrichtung in Nextcloud (Admin):** Browser erlauben einer Web-App den Zugriff auf einen fremden
+Server nur, wenn dieser das per CORS freigibt. Nextcloud tut das von Haus aus nicht. Die App
+[WebAppPassword](https://apps.nextcloud.com/apps/webapppassword) ergänzt diese Freigabe:
+
+1. In Nextcloud die App **WebAppPassword** installieren.
+2. In deren Einstellungen bei den erlaubten Origins für WebDAV `https://mohnstollen.github.io` eintragen.
+   Alternativ geht das in der `config.php`: `'webapppassword.origins' => ['https://mohnstollen.github.io'],`
+3. Ein App-Passwort erzeugen und es in der App zusammen mit Server-Adresse und Benutzername eintragen.
+
+Auch andere WebDAV-Server funktionieren, wenn sie CORS für diese Adresse erlauben. Dann im Feld „Server“ die vollständige
+WebDAV-Ordner-URL angeben. Zum lokalen Testen gibt es einen Mock-Server:
+`node scripts/webdav-mock.mjs 8090 max geheim http://localhost:8080`.
+
 ## Aufbau
 
 | Datei | Inhalt |
@@ -69,6 +97,8 @@ Scanner- und Karten-Bibliothek werden nach dem ersten Laden zwischengespeichert.
 | `js/db.js` | IndexedDB-Hülle (`beers`, `crates`, `consumptions`, `tastings`, `meta`) |
 | `js/styles.js` | Bierstil-Lexikon (Daten) und Zuordnung freier Stil-Eingaben |
 | `js/extras.js` | Barcode-Scan, Open Food Facts, Standort, Karte |
+| `js/sync-core.js` | Sync-Zusammenführung (rein, getestet) |
+| `js/sync.js` | WebDAV-Client |
 | `js/ui.js` | DOM-Helfer, Sheets, Toast, Chips/Sterne, Diagramme, Foto-Feld |
 | `js/app.js` | Ansichten (Start, Bestand, Verlauf, Statistik, Mehr) und Formulare |
 | `sw.js` | Service Worker (App-Shell-Cache, Version wird beim Deployment gesetzt) |
